@@ -20,8 +20,7 @@ def griddata_points_to_grid(x, y, values, xi, yi):
     grid_z = np.nan_to_num(grid_z, nan=0.0)
 
     return grid_z
-
-def create_3d_surface_plot(data):
+def create_3d_surface_plot(data, grid_size=100, color_map="Viridis"):
     try:
         logger.info("Creating 3D surface plot")
         # Extract data for plotting
@@ -30,9 +29,9 @@ def create_3d_surface_plot(data):
         z = data['NDVI'].values
         riesgo = data['Riesgo'].values
 
-        # Create a grid for the surface plot
-        xi = np.linspace(x.min(), x.max(), 100)
-        yi = np.linspace(y.min(), y.max(), 100)
+        # Create a grid for the surface plot using grid_size
+        xi = np.linspace(x.min(), x.max(), grid_size)
+        yi = np.linspace(y.min(), y.max(), grid_size)
         xi, yi = np.meshgrid(xi, yi)
 
         # Interpolate NDVI values onto the grid
@@ -57,7 +56,7 @@ def create_3d_surface_plot(data):
             z=zi,
             surfacecolor=riesgo_i,
             colorbar=dict(title='Riesgo'),
-            colorscale=colorscale,
+            colorscale=color_map,
             cmin=1,
             cmax=5,
         )])
@@ -65,6 +64,9 @@ def create_3d_surface_plot(data):
         # Update layout
         fig.update_layout(
             title='Crop Health 3D Surface',
+            width=1000,   # Increase the width
+            height=800,   # Increase the height
+            #autosize=False,  # Disable autosize when specifying width and height
             scene=dict(
                 xaxis_title='Longitude',
                 yaxis_title='Latitude',
