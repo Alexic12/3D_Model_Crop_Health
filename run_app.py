@@ -14,7 +14,7 @@ def main():
     # Build the command to run the Streamlit app
     print(f'Running Streamlit app: {script_path}')
 
-    cmd = [sys.executable, '-m', 'streamlit', 'run', script_path]
+    cmd = [sys.executable, '-m', 'streamlit', 'run', script_path, '--server.maxMessageSize=1000']
 
     # Run the Streamlit app
     subprocess.run(cmd)
