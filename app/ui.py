@@ -39,9 +39,10 @@ def render_ui():
     # Sidebar controls
     with st.sidebar:
         st.header("Settings")
-        grid_size = st.slider("Grid Resolution", min_value=50, max_value=200, value=100, step=10)
+        grid_size = st.slider("Grid Resolution", min_value=50, max_value=400, value=200, step=10)
+        z_scale = st.slider("Z-axis Scale", min_value=0.1, max_value=1.0, value=0.5, step=0.1)
+        smoothness = st.slider("Surface Smoothness", min_value=0.0, max_value=10.0, value=5.0, step=0.1)
         color_map = st.selectbox("Color Map", options=["Viridis", "Plasma", "Inferno", "Magma"])
-    
     # File uploader
     uploaded_file = st.file_uploader("Choose an Excel file", type=["xlsx", "xls"])
 
@@ -51,7 +52,7 @@ def render_ui():
 
         if data is not None:
             # Create and display the 3D surface plot
-            fig = create_3d_surface_plot(data, grid_size=grid_size, color_map=color_map)
+            fig = create_3d_surface_plot(data, grid_size=grid_size, color_map=color_map, z_scale=z_scale, smoothness=smoothness)
             if fig is not None:
                 st.plotly_chart(fig, use_container_width=True)
             else:

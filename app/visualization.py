@@ -4,6 +4,7 @@ import plotly.graph_objects as go
 import numpy as np
 import pandas as pd
 from scipy.interpolate import griddata
+from scipy.ndimage import gaussian_filter  # Import for smoothing
 import logging
 
 logger = logging.getLogger(__name__)
@@ -20,7 +21,7 @@ def griddata_points_to_grid(x, y, values, xi, yi):
     grid_z = np.nan_to_num(grid_z, nan=0.0)
 
     return grid_z
-def create_3d_surface_plot(data, grid_size=100, color_map="Viridis"):
+def create_3d_surface_plot(data, grid_size=100, color_map="Viridis", z_scale=1.0, smoothness=0.0):
     try:
         logger.info("Creating 3D surface plot")
         # Extract data for plotting
@@ -36,6 +37,13 @@ def create_3d_surface_plot(data, grid_size=100, color_map="Viridis"):
 
         # Interpolate NDVI values onto the grid
         zi = griddata_points_to_grid(x, y, z, xi, yi)
+
+        # Apply smoothing to zi if smoothness > 0
+        if smoothness > 0:
+            zi = gaussian_filter(zi, sigma=smoothness, mode='nearest')
+
+        # Apply Z-axis scaling
+        zi *= z_scale
 
         # Interpolate Riesgo values onto the grid
         riesgo_i = griddata_points_to_grid(x, y, riesgo, xi, yi)
@@ -65,7 +73,7 @@ def create_3d_surface_plot(data, grid_size=100, color_map="Viridis"):
         fig.update_layout(
             title='Crop Health 3D Surface',
             width=1000,   # Increase the width
-            height=800,   # Increase the height
+            height=1000,   # Increase the height
             #autosize=False,  # Disable autosize when specifying width and height
             scene=dict(
                 xaxis_title='Longitude',
