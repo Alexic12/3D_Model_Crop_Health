@@ -15,3 +15,28 @@ This application allows users to upload an Excel file containing crop health dat
 
    ```bash
    git clone https://github.com/your_username/my_crop_health_app.git
+
+
+
+   
+### Set Up Virtual Environment
+- **Create Virtual Environment**  
+```bash
+python -m venv .venv
+```
+
+
+- **Activate Virtual Environment**  
+Once the virtual environment is created, you need to activate it. The activation command differs depending on your operating system:
+
+On Windows:
+Remember to enable script execution first:
+
+```bash
+Set-ExecutionPolicy Unrestricted -Scope Process
+```
+
+```bash
+
+.venv\Scripts\activate
+```
