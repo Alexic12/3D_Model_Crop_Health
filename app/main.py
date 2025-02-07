@@ -1,4 +1,3 @@
-
 import streamlit as st
 from ui import render_ui
 import config  # Ensure config.py is imported to initialize logging
