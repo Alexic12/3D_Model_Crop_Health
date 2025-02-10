@@ -26,7 +26,7 @@ def render_ui():
 
         # Time-series interpolation controls
         interpolate_checkbox = st.checkbox("Enable Interpolation between sheets?", value=True)
-        steps_value = st.slider("Number of interpolation steps", min_value=1, max_value=20, value=10, step=1)
+        steps_value = st.slider("Number of interpolation steps", min_value=1, max_value=20, value=15, step=1)
 
         # Button to trigger time-series simulation
         simulate_button = st.button("View Simulation")
