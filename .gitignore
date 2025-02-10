@@ -10,6 +10,7 @@ __pycache__/
 .Python
 build/
 develop-eggs/
+assets/images/NDVI_2024
 dist/
 downloads/
 eggs/

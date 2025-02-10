@@ -1,5 +1,5 @@
 import streamlit as st
-from data_processing import process_uploaded_file, load_timeseries_data
+from data_processing import process_uploaded_file, load_timeseries_data, rejilla_indice, IDW_Index, Riesgo, invert_climate_file_rows
 from visualization import (
     create_2d_scatter_plot_ndvi,
     create_3d_surface_plot,
@@ -8,6 +8,7 @@ from visualization import (
 )
 import logging
 import pandas as pd
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -30,6 +31,54 @@ def render_ui():
 
         # Button to trigger time-series simulation
         simulate_button = st.button("View Simulation")
+
+        # Insert a new expander or section
+        with st.expander("Process NDVI GeoTIFF (New)"):
+            st.write("Upload a .tif file to extract NDVI, run IDW, and classify risk.")
+            tiff_file = st.file_uploader("Choose a GeoTIFF file", type=["tif", "tiff"])
+            
+            if tiff_file is not None:
+                # 1) Convert to NDVI DataFrame
+                ndvi_df = rejilla_indice(tiff_file)
+                if ndvi_df is None:
+                    st.error("Failed to process the TIFF.")
+                else:
+                    st.success(f"Extracted {len(ndvi_df)} valid NDVI pixels from the TIFF.")
+                    st.dataframe(ndvi_df.head(10))
+
+                    # 2) IDW
+                    resolution = st.slider("IDW Resolution", 5, 200, 20)
+                    zidw, df_idw = IDW_Index(ndvi_df, resolution=resolution)
+                    if zidw is None:
+                        st.error("IDW failed.")
+                    else:
+                        st.write("IDW result (2D array) shape:", zidw.shape)
+                        st.dataframe(df_idw.head(10))
+
+                        # 3) Riesgo classification
+                        # Define some cluster seeds
+                        initial_clusters = np.array([0.0, 0.3, 0.6, 0.9])
+                        df_risk, new_clusters = Riesgo(df_idw, initial_clusters)
+                        st.write("After Risk classification:")
+                        st.dataframe(df_risk.head(10))
+                        st.write("Updated clusters:", new_clusters)
+
+                        # Optional: Save or visualize the results
+                        # e.g. generate a 3D surface from df_risk
+                        # ...
+
+        with st.expander("Invert Climate File Rows"):
+            climate_file = st.file_uploader("Upload Climate Excel", type=["xlsx", "xls"])
+            if climate_file is not None:
+                df_inverted = invert_climate_file_rows(climate_file)
+                if df_inverted is not None:
+                    st.dataframe(df_inverted.head(20))
+                    # or offer a download button
+                    st.download_button(
+                        label="Download Inverted Excel",
+                        data=df_inverted.to_excel(index=False),
+                        file_name="Clima_inverted.xlsx"
+                    )
     
     # --- MAIN CONTENT ---
     uploaded_file = st.file_uploader("Choose an Excel file", type=["xlsx", "xls"])

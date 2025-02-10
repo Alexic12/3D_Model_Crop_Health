@@ -282,3 +282,23 @@ def Riesgo(df_idw, clusters):
     except Exception as e:
         logger.exception(f"Error in Riesgo: {e}")
         return df_idw, clusters
+    
+
+def invert_climate_file_rows(file_buffer, output_filename=None):
+    """
+    Reads an Excel climate file from an uploaded buffer,
+    inverts its rows, and optionally returns or saves the result.
+    """
+    try:
+        df = pd.read_excel(file_buffer)
+        # invert
+        df_inverted = df.iloc[::-1]
+
+        if output_filename:
+            df_inverted.to_excel(output_filename, index=False)
+            return None
+        else:
+            return df_inverted
+    except Exception as e:
+        logger.exception(f"Error in invert_climate_file_rows: {e}")
+        return None
