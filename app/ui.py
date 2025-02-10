@@ -1,5 +1,14 @@
 import streamlit as st
-from data_processing import process_uploaded_file, load_timeseries_data, rejilla_indice, IDW_Index, Riesgo, invert_climate_file_rows
+from data_processing import (
+    process_uploaded_file,
+    load_timeseries_data,
+    rejilla_indice,
+    IDW_Index,
+    Riesgo,
+    invert_climate_file_rows,
+    bulk_unzip_and_analyze,
+    bulk_unzip_and_analyze_parallel  # <-- we import the new parallel function
+)
 from visualization import (
     create_2d_scatter_plot_ndvi,
     create_3d_surface_plot,
@@ -9,6 +18,8 @@ from visualization import (
 import logging
 import pandas as pd
 import numpy as np
+import os
+import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -32,40 +43,101 @@ def render_ui():
         # Button to trigger time-series simulation
         simulate_button = st.button("View Simulation")
 
-        # Insert a new expander or section
-        with st.expander("Process NDVI GeoTIFF (New)"):
+        # -------------------------
+        # Bulk NDVI Zip Analysis
+        # -------------------------
+        with st.expander("Bulk NDVI ZIP Analysis"):
+            st.write("**Upload multiple .zip files** (e.g., `001. perimetro__prev_NDVI_31ene2022.zip`) that contain pairs of `.tiff` files (`base` and `ColorMap`).")
+            indice = st.text_input("Enter Vegetation Index name", value="NDVI")
+            anio = st.text_input("Enter Year of analysis", value="2024")
+
+            # Multiple file upload
+            uploaded_zips = st.file_uploader("Upload one or more ZIP files", type=["zip"], accept_multiple_files=True)
+
+            # We will store them in ./upload_data/NDVI_2024, for example
+            base_folder = "./upload_data"
+            subfolder = os.path.join(base_folder, f"{indice}_{anio}")
+
+            if uploaded_zips:
+                st.write(f"{len(uploaded_zips)} zip file(s) uploaded.")
+                # Save them to the subfolder
+                if not os.path.exists(subfolder):
+                    os.makedirs(subfolder, exist_ok=True)
+
+                for up_file in uploaded_zips:
+                    # Save each file to disk with its original name
+                    out_path = os.path.join(subfolder, up_file.name)
+                    with open(out_path, "wb") as f:
+                        f.write(up_file.getbuffer())
+                st.success(f"All ZIP files saved to {subfolder}.")
+
+            # Button to run the entire analysis (original, single-process)
+            if st.button("Analyze NDVI Zips"):
+                if not os.path.exists(subfolder):
+                    st.error("No subfolder found. Please upload files first.")
+                else:
+                    # Call the function from data_processing (original version)
+                    result_xlsx = bulk_unzip_and_analyze(indice, anio, base_folder=base_folder)
+                    if result_xlsx and os.path.exists(result_xlsx):
+                        st.success(f"Analysis complete. Results in {result_xlsx}")
+                        # Offer a download
+                        with open(result_xlsx, "rb") as f:
+                            btn = st.download_button(
+                                label="Download NDVI Results Excel",
+                                data=f,
+                                file_name=os.path.basename(result_xlsx),
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            )
+                    else:
+                        st.error("No result file was produced or something went wrong.")
+
+            # Button to run the parallel approach
+            if st.button("Analyze NDVI Zips (Parallel)"):
+                if not os.path.exists(subfolder):
+                    st.error("No subfolder found. Please upload files first.")
+                else:
+                    result_xlsx = bulk_unzip_and_analyze_parallel(indice, anio, base_folder=base_folder)
+                    if result_xlsx and os.path.exists(result_xlsx):
+                        st.success(f"Parallel analysis complete. Results in {result_xlsx}")
+                        with open(result_xlsx, "rb") as f:
+                            st.download_button(
+                                label="Download Parallel NDVI Results Excel",
+                                data=f,
+                                file_name=os.path.basename(result_xlsx),
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                            )
+                    else:
+                        st.error("No result file was produced or something went wrong.")
+
+        # Insert a new expander or section for single GeoTIFF (old)
+        with st.expander("Process Single NDVI GeoTIFF (Legacy)"):
             st.write("Upload a .tif file to extract NDVI, run IDW, and classify risk.")
             tiff_file = st.file_uploader("Choose a GeoTIFF file", type=["tif", "tiff"])
             
             if tiff_file is not None:
-                # 1) Convert to NDVI DataFrame
-                ndvi_df = rejilla_indice(tiff_file)
+                # If you have separate colorMap, you'd pass them as separate arguments; here we re-use the same
+                ndvi_df = rejilla_indice(tiff_file, tiff_file)
                 if ndvi_df is None:
                     st.error("Failed to process the TIFF.")
                 else:
                     st.success(f"Extracted {len(ndvi_df)} valid NDVI pixels from the TIFF.")
                     st.dataframe(ndvi_df.head(10))
 
-                    # 2) IDW
-                    resolution = st.slider("IDW Resolution", 5, 200, 20)
-                    zidw, df_idw = IDW_Index(ndvi_df, resolution=resolution)
+                    # IDW
+                    resolution = st.slider("IDW Resolution", 5, 200, 20, key="legacy_idw_slider")
+                    zidw, df_idw = IDW_Index(ndvi_df)
                     if zidw is None:
                         st.error("IDW failed.")
                     else:
                         st.write("IDW result (2D array) shape:", zidw.shape)
                         st.dataframe(df_idw.head(10))
 
-                        # 3) Riesgo classification
-                        # Define some cluster seeds
+                        # Riesgo classification
                         initial_clusters = np.array([0.0, 0.3, 0.6, 0.9])
-                        df_risk, new_clusters = Riesgo(df_idw, initial_clusters)
+                        df_risk, new_clusters = Riesgo(df_idw, initial_clusters, df_idw)
                         st.write("After Risk classification:")
                         st.dataframe(df_risk.head(10))
                         st.write("Updated clusters:", new_clusters)
-
-                        # Optional: Save or visualize the results
-                        # e.g. generate a 3D surface from df_risk
-                        # ...
 
         with st.expander("Invert Climate File Rows"):
             climate_file = st.file_uploader("Upload Climate Excel", type=["xlsx", "xls"])
@@ -110,8 +182,6 @@ def render_ui():
             lat_array = sheet_data["lat"]
             lon_array = sheet_data["lon"]
             ndvi_2d   = sheet_data["ndvi"]
-
-            
 
             # --- STATIC 3D ---
             x_vals = []

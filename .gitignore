@@ -11,6 +11,7 @@ __pycache__/
 build/
 develop-eggs/
 assets/images/NDVI_2024
+upload_data
 dist/
 downloads/
 eggs/
