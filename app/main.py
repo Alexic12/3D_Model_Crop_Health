@@ -1,6 +1,6 @@
 import streamlit as st
 from ui import render_ui
-import config  # Ensure config.py is imported to initialize logging
+import config  # Ensures logging is set up
 
 def main():
     st.set_page_config(

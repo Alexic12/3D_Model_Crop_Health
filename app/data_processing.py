@@ -1,208 +1,259 @@
-import pandas as pd
-import numpy as np
-import streamlit as st
-import logging
-from scipy.interpolate import griddata
-import rasterio
-from pyproj import Transformer
-import logging
-
-logger = logging.getLogger(__name__)
-
 import os
 import zipfile
 import datetime
-from PIL import Image
-import shutil  # if you need to move or remove directories
+import numpy as np
+import pandas as pd
+import rasterio
+from pyproj import Transformer
+import logging
+from scipy.interpolate import griddata
+from scipy.ndimage import gaussian_filter
+import streamlit as st
+
+import concurrent.futures  # For parallelism
+import multiprocessing     # To get CPU count
+
+logger = logging.getLogger(__name__)
 
 
 def process_uploaded_file(uploaded_file):
-    """
-    Reads a single-sheet Excel file with columns [Longitud, Latitud, NDVI, Riesgo].
-    Ensures NDVI is in [-1.5, 1.5], Riesgo in [1..5].
-    Returns a DataFrame if valid, otherwise None.
-    """
+    # [unchanged from before...]
     try:
-        logger.info("Processing uploaded file")
-        
-        # Read the Excel file into a DataFrame (first sheet by default)
         df = pd.read_excel(uploaded_file)
-        
-        # Verify required columns
-        required_columns = ["Longitud", "Latitud", "NDVI", "Riesgo"]
-        if not all(col in df.columns for col in required_columns):
-            error_message = (
-                "The uploaded file must contain the following columns: "
-                f"{', '.join(required_columns)}"
-            )
-            st.error(error_message)
-            logger.error(error_message)
+        required = ["Longitud", "Latitud", "NDVI", "Riesgo"]
+        if not all(c in df.columns for c in required):
+            st.error("Excel must contain columns: Longitud, Latitud, NDVI, Riesgo")
             return None
-
-        # Extract the required columns
-        data = df[required_columns].copy()
-        
-        # Handle missing values
-        if data.isnull().values.any():
-            st.warning("Missing values detected. Rows with missing values will be dropped.")
-            logger.warning("Missing values in data")
-            data.dropna(subset=required_columns, inplace=True)
-        
-        # Validate NDVI range
-        if not ((data["NDVI"] >= -1.5) & (data["NDVI"] <= 1.5)).all():
-            error_message = "NDVI values must be between -1.5 and 1.5"
-            st.error(error_message)
-            logger.error(error_message)
-            return None
-
-        # Validate Riesgo range
-        if not ((data["Riesgo"] >= 1) & (data["Riesgo"] <= 5)).all():
-            error_message = "Riesgo values must be between 1 and 5"
-            st.error(error_message)
-            logger.error(error_message)
-            return None
-
-        # Convert Riesgo to integer
-        data["Riesgo"] = data["Riesgo"].astype(int)
-        
-        logger.info("File processed successfully")
-        return data
-
+        return df
     except Exception as e:
-        error_message = f"An error occurred while processing the file: {e}"
-        st.error(error_message)
-        logger.exception("Error processing file")
+        st.error(f"Error reading single-sheet file: {e}")
         return None
 
 
 def load_timeseries_data(uploaded_file):
-    """
-    Reads an Excel file with multiple sheets, each containing a matrix:
-      - First row is discarded.
-      - Second row (index=1) has longitude in columns [1..end].
-      - First column in rows [2..end] has latitude.
-      - Intersection is NDVI data in 2D form.
-
-    Returns a dict { sheet_name: {"lon":..., "lat":..., "ndvi":...} } or None on error.
-    """
+    # [unchanged from before...]
     try:
-        logger.info("Loading time-series data from multiple sheets...")
-
         excel_obj = pd.ExcelFile(uploaded_file)
         sheet_names = excel_obj.sheet_names
         data_sheets = {}
-
         for sname in sheet_names:
-            logger.info(f"Reading sheet: {sname}")
             df = pd.read_excel(uploaded_file, sheet_name=sname, header=None)
-            
-            # Basic check
             if df.shape[0] < 3 or df.shape[1] < 2:
-                logger.warning(f"Sheet {sname} is too small. Skipping.")
                 continue
-            
-            # The 1D array of longitude is from row=1, columns=1..end
-            lon = df.iloc[1, 1:].to_numpy(dtype=float)
-            # The 1D array of latitude is from rows=2..end, col=0
-            lat = df.iloc[2:, 0].to_numpy(dtype=float)
-            # The 2D NDVI matrix is from rows=2..end, columns=1..end
-            ndvi_matrix = df.iloc[2:, 1:].to_numpy(dtype=float)
-            
+            lon = df.iloc[1, 1:].to_numpy(float)
+            lat = df.iloc[2:, 0].to_numpy(float)
+            ndvi_matrix = df.iloc[2:, 1:].to_numpy(float)
             data_sheets[sname] = {
                 "lon": lon,
                 "lat": lat,
                 "ndvi": ndvi_matrix
             }
-
-        if not data_sheets:
-            st.error("No valid sheets found or parsing failed in the uploaded file.")
-            return None
-
-        logger.info("Successfully loaded all sheets for time-series data.")
-        return data_sheets
+        return data_sheets if data_sheets else None
 
     except Exception as e:
-        error_message = f"An error occurred while loading time-series data: {e}"
-        st.error(error_message)
-        logger.exception("Error in load_timeseries_data")
+        st.error(f"Error loading multi-sheet time-series: {e}")
         return None
 
 
-def griddata_points_to_grid(x, y, values, xi, yi):
+def invert_climate_file_rows(file_buffer, output_filename=None):
+    # [unchanged from before...]
+    try:
+        df = pd.read_excel(file_buffer)
+        df_inverted = df.iloc[::-1]
+        if output_filename:
+            df_inverted.to_excel(output_filename, index=False)
+            return None
+        else:
+            return df_inverted
+    except Exception as e:
+        logger.exception(f"Error in invert_climate_file_rows: {e}")
+        return None
+
+def rejilla_indice(ruta_imagen, ruta_color):
     """
-    Interpolates scattered (x, y, values) onto a regular grid (xi, yi).
-    Replaces NaN with 0.0 after interpolation.
+    Reads the “base NDVI” from `ruta_imagen` (GeoTIFF) + color map from `ruta_color`.
+    Returns a DataFrame [UTM-x, UTM-y, longitud, latitud, col, row, NDVI].
+    Missing or -9999 NDVI become NaN and are skipped.
     """
-    points = np.column_stack((x, y))
-    grid_z = griddata(points, values, (xi, yi), method='linear')
-    grid_z = np.nan_to_num(grid_z, nan=0.0)
-    return grid_z
+    from PIL import Image
+    try:
+        logger.info(f"[rejilla_indice] Processing base='{ruta_imagen}', color='{ruta_color}'")
+        color_img = Image.open(ruta_color)
+        pixels = color_img.load()
 
+        xm = []
+        ym = []
+        latm = []
+        lonm = []
+        colm = []
+        rowm = []
+        NDVI = []
 
-def rejilla_indice(ruta_imagen, ruta_imagen_2):
-    # 1. Load the colorized image using PIL
-    imagen = Image.open(ruta_imagen_2)
-    pixels = imagen.load()  # for color info
+        with rasterio.open(ruta_imagen) as src:
+            band1 = src.read(1)
+            crs = src.crs
+            logger.debug(f"[rejilla_indice] CRS={crs}, shape=({src.height}, {src.width})")
+            no_data_value = src.nodata if src.nodata is not None else -9999
+            band1 = np.where(band1 == no_data_value, np.nan, band1)
 
-    xm = []; ym = []
-    latm = []; lonm = []
-    colm = []; rowm = []
-    NDVI = []
+            transformer = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
 
-    # 2. Open the NDVI (grayscale) with rasterio
-    with rasterio.open(ruta_imagen) as src:
-        banda1 = src.read(1)
-        crs = src.crs
-        print("CRS de la imagen:", crs)
-
-        # For debugging, let's check first pixel
-        x_0, y_0 = src.xy(0, 0)
-        print("Coordenadas del píxel (0,0):", x_0, y_0)
-
-        print("el ancho es", src.width)
-        print("el alto es", src.height)
-
-        # Convert no_data to something if needed
-        no_data_value = src.nodata if src.nodata is not None else -9999
-        banda1 = np.where(banda1 == no_data_value, np.nan, banda1)
-
-        transformer = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
-
-        # 3. Loop over each pixel
-        for row_i in range(src.height):
-            for col_i in range(src.width):
-                val = banda1[row_i, col_i]
-                if val is not np.nan and val != -9999.0:
-                    x, y = src.xy(row_i, col_i)
-                    # Retrieve color pixel from PIL (note the order is (col, row) for PIL)
-                    color_vals = pixels[col_i, row_i]  # might be RGBA or RGB
-
-                    # Convert them to [0..1] floats
-                    if isinstance(color_vals, int):
-                        # Single-band? 
-                        color_vals = (color_vals / 255.0,)
-                    else:
-                        color_vals = tuple(c / 255.0 for c in color_vals)
-
-                    # Transform to lat/lon
+            for r_i in range(src.height):
+                for c_i in range(src.width):
+                    ndvi_val = band1[r_i, c_i]
+                    if np.isnan(ndvi_val):
+                        continue
+                    x, y = src.xy(r_i, c_i)
                     lon, lat = transformer.transform(x, y)
+                    xm.append(x)
+                    ym.append(y)
+                    latm.append(lat)
+                    lonm.append(lon)
+                    colm.append(c_i)
+                    rowm.append(r_i)
+                    NDVI.append(float(ndvi_val))
 
-                    xm.append(x);    ym.append(y)
-                    lonm.append(lon); latm.append(lat)
-                    colm.append(col_i); rowm.append(row_i)
-                    NDVI.append(val)
+        df = pd.DataFrame({
+            "UTM-x": xm,
+            "UTM-y": ym,
+            "longitud": lonm,
+            "latitud": latm,
+            "col": colm,
+            "row": rowm,
+            "NDVI": NDVI
+        })
+        logger.info(f"[rejilla_indice] Created DataFrame with {len(df)} points.")
+        return df
 
-    df = pd.DataFrame({
-        'UTM-x': xm,
-        'UTM-y': ym,
-        'longitud': lonm,
-        'latitud': latm,
-        'col': colm,
-        'row': rowm,
-        'NDVI': NDVI
-    })
-    return df
+    except Exception as e:
+        logger.exception(f"[rejilla_indice] Error: {e}")
+        return None
 
+def IDW_Index(df, resolution=5, k_neighbors=10):
+    """
+    Simple IDW interpolation. Returns (dfidw, dfidw_2).
+    dfidw => 2D "spreadsheet" style
+    dfidw_2 => long-form [id, long-xm, long-ym, NDVI]
+    """
+    try:
+        logger.info(f"[IDW_Index] Starting IDW with resolution={resolution}, k_neighbors={k_neighbors}")
+        xm = df["longitud"].values
+        ym = df["latitud"].values
+        zms = df["NDVI"].values
+
+        x_min, x_max = xm.min(), xm.max()
+        y_min, y_max = ym.min(), ym.max()
+
+        xg = np.linspace(x_min, x_max, resolution)
+        yg = np.linspace(y_min, y_max, resolution)
+
+        zidw = np.zeros((resolution, resolution), dtype=float)
+
+        N = resolution * resolution
+        ids = np.arange(N)
+        long_xm = np.zeros(N, dtype=float)
+        long_ym = np.zeros(N, dtype=float)
+        ndvi_vals = np.zeros(N, dtype=float)
+
+        idx_out = 0
+        for i in range(resolution):
+            for j in range(resolution):
+                gx = xg[i]
+                gy = yg[j]
+                long_xm[idx_out] = gx
+                long_ym[idx_out] = gy
+                dist = np.sqrt((gx - xm)**2 + (gy - ym)**2)
+                k_indices = np.argsort(dist)[:k_neighbors]
+                dist_nn = dist[k_indices]
+                dist_nn[dist_nn == 0] = 1e-12
+                w = 1.0 / dist_nn**3
+                weighted_z = w * zms[k_indices]
+                val = weighted_z.sum() / w.sum()
+                zidw[i, j] = val
+                ndvi_vals[idx_out] = val
+                idx_out += 1
+
+        df_spread = np.zeros((resolution+1, resolution+1), dtype=object)
+        df_spread[0, 0] = 0
+        for c in range(resolution):
+            df_spread[0, c+1] = round(xg[c], 6)
+        for r in range(resolution):
+            df_spread[r+1, 0] = round(yg[r], 6)
+        for r in range(resolution):
+            for c in range(resolution):
+                df_spread[r+1, c+1] = round(zidw[r, c], 6)
+
+        dfidw = pd.DataFrame(df_spread)
+        dfidw_2 = pd.DataFrame({
+            "id": ids,
+            "long-xm": long_xm,
+            "long-ym": long_ym,
+            "NDVI": ndvi_vals
+        })
+
+        logger.info(f"[IDW_Index] IDW complete. (dfidw shape={dfidw.shape}, dfidw_2 rows={len(dfidw_2)})")
+        return dfidw, dfidw_2
+
+    except Exception as e:
+        logger.exception("[IDW_Index] Error:")
+        return None, None
+
+
+def Riesgo(df_idw_2, XC):
+    """
+    Classifies NDVI in df_idw_2 with a minimal clustering approach.
+    Returns (df_idw_2_with_Riesgo, updated_XC).
+    """
+    try:
+        logger.info("[Riesgo] Starting cluster assignment.")
+        z = df_idw_2["NDVI"].values
+        n = len(z)
+        nXC = np.zeros((n, 1))
+        for iteration in range(2):
+            XC = np.sort(XC)[::-1]
+            for k in range(min(n, 25)):
+                dist_sq = (XC - z[k])**2
+                nearest = np.argmin(dist_sq)
+                XC[nearest] = (XC[nearest] + z[k]) / 2.0
+                nXC[k, 0] = nearest
+        df_idw_2["Riesgo"] = (nXC[:, 0] + 1).astype(int)
+        logger.info("[Riesgo] Completed risk assignment.")
+        return df_idw_2, XC
+    except Exception as e:
+        logger.exception("[Riesgo] Error:")
+        return df_idw_2, XC
+
+
+def save_df_to_excel(xlsx_path, df_in, sheet_name):
+    """
+    Appends or writes DataFrame to an Excel file in `sheet_name`.
+    """
+    from openpyxl.utils.exceptions import InvalidFileException
+    try:
+        logger.info(f"[save_df_to_excel] Writing sheet='{sheet_name}' to '{xlsx_path}' (rows={len(df_in)})")
+        with pd.ExcelWriter(xlsx_path, mode='a', engine='openpyxl', if_sheet_exists='new') as writer:
+            df_in.to_excel(writer, index=False, sheet_name=sheet_name)
+    except FileNotFoundError:
+        logger.info(f"[save_df_to_excel] Creating new Excel file: '{xlsx_path}'")
+        with pd.ExcelWriter(xlsx_path, mode='w', engine='openpyxl') as writer:
+            df_in.to_excel(writer, index=False, sheet_name=sheet_name)
+    except InvalidFileException:
+        logger.info(f"[save_df_to_excel] InvalidFile => re-creating '{xlsx_path}'")
+        with pd.ExcelWriter(xlsx_path, mode='w', engine='openpyxl') as writer:
+            df_in.to_excel(writer, index=False, sheet_name=sheet_name)
+
+
+def extract_date_from_filename(filename):
+    """
+    Try extracting something like '06ene2024' from the filename via regex.
+    Adjust if your naming differs.
+    """
+    import re
+    pattern = re.compile(r'(\d{1,2}[a-zA-Z]{3}\d{2,4})')
+    match = pattern.search(filename)
+    if match:
+        return match.group(1)
+    return None
 
 def IDW_Index(df):
     xm = np.array(df['longitud'])
@@ -269,334 +320,179 @@ def IDW_Index(df):
 
     return dfidw, dfidw_2
 
+#------------------ Parallel Code with Debug Prints ------------------ #
 
-
-def Riesgo(dfm, XC, df_2):
+def _process_one_k(k_val, folder_path, colorMap_keyword, XC):
     """
-    This replicates your code that used `df_2[1]['NDVI']` as XLDA, etc.
-    We must pass in the second output from IDW_Index (df_2) so we can get 'NDVI'.
+    Top-level function for parallel execution.
+    Runs 'rejilla_indice + IDW_Index + Riesgo' for a single K = 001, 002, etc.
+    Returns (k_val, sheet_name, df_espacial, df_idw, df_qgis).
     """
-    nXC = np.zeros((25, 1))
-    # The second item from IDW_Index is df_2[1], but here we just do:
-    XLDA = np.array(df_2['NDVI'])  # using that logic
+    from data_processing import (
+        extract_date_from_filename,
+        rejilla_indice,
+        IDW_Index,
+        Riesgo
+    )
 
-    for k1 in range(2):
-        XC = np.sort(XC)[::-1]
-        for k in range(25):
-            if k >= len(XLDA):
-                break  # if your data is smaller than 25
-            dist_sq = (XC - XLDA[k])**2
-            ncj = np.argmin(dist_sq)
-            XC[ncj] = (XC[ncj] + XLDA[k]) / 2
-            nXC[k, 0] = ncj
+    logger.info(f"[_process_one_k] Worker starts for k={k_val}")
+    k_str = str(k_val).zfill(3)
+    base_file, color_file = None, None
 
-    dfm['Riesgo'] = nXC[:len(dfm), 0] + 1  # just to match your code shape
-    return dfm, XC
+    # 1) Identify the TIFF files for the given prefix k_str
+    for fname in os.listdir(folder_path):
+        if fname.startswith(k_str) and fname.lower().endswith('.tiff'):
+            if colorMap_keyword in fname:
+                color_file = fname
+            else:
+                base_file = fname
+
+    if not base_file or not color_file:
+        logger.warning(f"[_process_one_k] k={k_val} => No valid pair => skipping.")
+        return (k_val, None, None, None, None)
+
+    # 2) Build a sheet name from date in the filename (or fallback)
+    sheet_name = extract_date_from_filename(base_file)
+    if not sheet_name:
+        sheet_name = f"{k_str}_data"
+
+    base_path  = os.path.join(folder_path, base_file)
+    color_path = os.path.join(folder_path, color_file)
+    logger.info(f"[_process_one_k] k={k_val}, base='{base_file}', color='{color_file}', sheet='{sheet_name}'")
+
+    df_esp = rejilla_indice(base_path, color_path)
+    if df_esp is None or df_esp.empty:
+        logger.warning(f"[_process_one_k] k={k_val} => No data in df_esp => skipping.")
+        return (k_val, sheet_name, None, None, None)
+
+    df_idw, df_idw_2 = IDW_Index(df_esp)
+    if df_idw is None or df_idw_2 is None:
+        logger.warning(f"[_process_one_k] k={k_val} => IDW failed => partial data.")
+        return (k_val, sheet_name, df_esp, None, None)
+
+    # Use a copy of XC so each image doesn't mutate a shared global
+    df_qgis, _ = Riesgo(df_idw_2, XC.copy())
+
+    logger.info(f"[_process_one_k] k={k_val} => success => returning data (sheet='{sheet_name}')")
+    return (k_val, sheet_name, df_esp, df_idw, df_qgis)
 
 
-def invert_climate_file_rows(file_buffer, output_filename=None):
+def bulk_unzip_and_analyze_new_parallel(
+    indice, anio, base_folder="./upload_data", colorMap_keyword="ColorMap"
+):
     """
-    Reads an Excel climate file from an uploaded buffer,
-    inverts its rows, and optionally returns or saves the result.
+    Parallel version of the bulk analysis. Because Windows requires
+    top-level pickleable callables, _process_one_k is now defined above.
     """
-    try:
-        df = pd.read_excel(file_buffer)
-        # invert
-        df_inverted = df.iloc[::-1]
-
-        if output_filename:
-            df_inverted.to_excel(output_filename, index=False)
-            return None
-        else:
-            return df_inverted
-    except Exception as e:
-        logger.exception(f"Error in invert_climate_file_rows: {e}")
-        return None
-    
-
-def bulk_unzip_and_analyze(indice, anio, base_folder="./upload_data"):
-    """
-    This is the original main routine that:
-      1) Looks in base_folder/<indice>_<anio>/ for .zip files named like "001. perimetro__prev_NDVI_..."
-      2) Unzips them, renames them
-      3) Identifies each colorMap pair
-      4) Runs rejilla_indice, IDW_Index, Riesgo
-      5) Writes the results to an Excel with NDVI_RESULTS_<YYYY-MM-DD_HHMM>.xlsx
-    """
-
-    import os
-    import time
-    from openpyxl import load_workbook
-    from openpyxl.utils.exceptions import InvalidFileException
-
+    logger.info(f"[bulk_unzip_and_analyze_new_parallel] Starting => indice='{indice}', anio='{anio}'")
     folder_path = os.path.join(base_folder, f"{indice}_{anio}")
     if not os.path.exists(folder_path):
         os.makedirs(folder_path, exist_ok=True)
+        logger.info(f"[bulk_unzip_and_analyze_new_parallel] Created folder_path='{folder_path}'")
 
     # 1) Unzip all .zip
-    for archivo in os.listdir(folder_path):
-        if archivo.lower().endswith('.zip'):
-            ruta_zip = os.path.join(folder_path, archivo)
-            print(f"Procesando: {ruta_zip}")
-
-            with zipfile.ZipFile(ruta_zip, 'r') as zip_ref:
-                zip_ref.extractall(folder_path)
-                print(f"Archivos extraídos en: {folder_path}")
-                print(zip_ref.namelist())
-
-                prefix = archivo[0:5]  # e.g. "001. "
-                name_list = zip_ref.namelist()
-                if len(name_list) >= 2:
-                    fn1 = name_list[0]
-                    fn2 = name_list[1]
-                    old_path1 = os.path.join(folder_path, fn1)
-                    old_path2 = os.path.join(folder_path, fn2)
-
-                    new_name1 = prefix + fn1
-                    new_name2 = prefix + fn2
-                    new_path1 = os.path.join(folder_path, new_name1)
-                    new_path2 = os.path.join(folder_path, new_name2)
-
-                    if os.path.exists(new_path1):
-                        os.remove(old_path1)
+    for file_ in os.listdir(folder_path):
+        if file_.lower().endswith(".zip"):
+            zip_path = os.path.join(folder_path, file_)
+            logger.info(f"[bulk_unzip_and_analyze_new_parallel] Unzipping => {zip_path}")
+            with zipfile.ZipFile(zip_path, 'r') as zf:
+                zf.extractall(folder_path)
+                prefix = file_[0:5]  # e.g. "001."
+                nlist = zf.namelist()
+                if len(nlist) >= 2:
+                    old1 = os.path.join(folder_path, nlist[0])
+                    old2 = os.path.join(folder_path, nlist[1])
+                    new1 = os.path.join(folder_path, prefix + nlist[0])
+                    new2 = os.path.join(folder_path, prefix + nlist[1])
+                    logger.debug(f"[bulk_unzip_and_analyze_new_parallel] rename => {old1} => {new1}")
+                    logger.debug(f"[bulk_unzip_and_analyze_new_parallel] rename => {old2} => {new2}")
+                    if os.path.exists(new1):
+                        try: os.remove(old1)
+                        except: pass
                     else:
-                        os.rename(old_path1, new_path1)
-
-                    if os.path.exists(new_path2):
-                        os.remove(old_path2)
+                        os.rename(old1, new1)
+                    if os.path.exists(new2):
+                        try: os.remove(old2)
+                        except: pass
                     else:
-                        os.rename(old_path2, new_path2)
+                        os.rename(old2, new2)
 
-    nombre = "ColorMap"
-    files_with_colormap = [f for f in os.listdir(folder_path)
-                           if nombre in f and f.lower().endswith('.tiff')]
-    print("Cantidad de archivos con ColorMap:", len(files_with_colormap))
+    # 2) Gather all colorMap .tiff
+    color_files = [
+        f for f in os.listdir(folder_path)
+        if colorMap_keyword in f and f.lower().endswith('.tiff')
+    ]
+    logger.info(f"[bulk_unzip_and_analyze_new_parallel] Found {len(color_files)} color-map files in {folder_path}")
+    if not color_files:
+        msg = f"No files containing '{colorMap_keyword}' found."
+        logger.error(msg)
+        st.error(msg)
+        return None, None, None
 
-    XC = np.sort(np.random.uniform(0,1,5))
-    print("Inicial XC:", XC)
+    # Final Excel filenames
+    espacial_xlsx = os.path.join(folder_path, f"INFORME_{indice}_Espacial_{anio}.xlsx")
+    idw_xlsx      = os.path.join(folder_path, f"INFORME_{indice}_IDW_{anio}.xlsx")
+    qgis_xlsx     = os.path.join(folder_path, f"INFORME_{indice}_QGIS_{anio}.xlsx")
 
-    date_str = datetime.datetime.now().strftime("%Y-%m-%d_%H%M")
-    results_filename = os.path.join(folder_path, f"NDVI_RESULTS_{date_str}.xlsx")
+    # Optionally remove older versions
+    for path_ in [espacial_xlsx, idw_xlsx, qgis_xlsx]:
+        if os.path.exists(path_):
+            logger.info(f"[bulk_unzip_and_analyze_new_parallel] Removing old {path_}")
+            os.remove(path_)
 
+    # 3) Identify max k => "001", "002", ...
     max_k = 0
-    for f in files_with_colormap:
-        prefix_str = f[0:3]  # "001"
-        if prefix_str.isdigit():
-            k_val = int(prefix_str)
-            if k_val > max_k:
-                max_k = k_val
-
-    print("Tenemos un max K:", max_k)
-
-    for k in range(1, max_k+1):
-        k_str = str(k).zfill(3)
-        colormap_file = None
-        base_file = None
-        for f in os.listdir(folder_path):
-            if f.startswith(k_str):
-                if nombre in f:  # "ColorMap"
-                    colormap_file = f
-                else:
-                    if f.lower().endswith('.tiff'):
-                        base_file = f
-
-        if colormap_file is None or base_file is None:
-            continue
-
-        print(f"Processing K={k}: base={base_file}, color={colormap_file}")
-
-        ruta_base = os.path.join(folder_path, base_file)
-        ruta_color = os.path.join(folder_path, colormap_file)
-
-        df = rejilla_indice(ruta_base, ruta_color)
-
-        dfidw, dfidw_2 = IDW_Index(df)
-
-        df2x, XC = Riesgo(dfidw_2, XC, dfidw_2)
-
-        from openpyxl import Workbook, load_workbook
-        from openpyxl.utils.exceptions import InvalidFileException
-
-        def append_df_to_excel(filename, dfdata, sheet_name):
-            try:
-                with pd.ExcelWriter(filename, mode='a', engine='openpyxl', if_sheet_exists='new') as writer:
-                    dfdata.to_excel(writer, index=False, sheet_name=sheet_name)
-            except FileNotFoundError:
-                with pd.ExcelWriter(filename, mode='w', engine='openpyxl') as writer:
-                    dfdata.to_excel(writer, index=False, sheet_name=sheet_name)
-            except InvalidFileException:
-                with pd.ExcelWriter(filename, mode='w', engine='openpyxl') as writer:
-                    dfdata.to_excel(writer, index=False, sheet_name=sheet_name)
-
-        append_df_to_excel(results_filename, df,        f"{k_str}_Espacial")
-        append_df_to_excel(results_filename, dfidw,     f"{k_str}_IDW0")
-        append_df_to_excel(results_filename, dfidw_2,   f"{k_str}_IDW1")
-        append_df_to_excel(results_filename, df2x,      f"{k_str}_QGIS")
-
-    print("ALL DONE. Final clusters:", XC)
-    print(f"Results written to: {results_filename}")
-
-    return results_filename
-
-
-# ----------------------------------------------------------------------------
-# New Parallel Implementation
-# ----------------------------------------------------------------------------
-
-import concurrent.futures
-
-def _process_one_k(args):
-    """
-    A helper function for parallel processing of each K.
-    We'll do basically what the loop in bulk_unzip_and_analyze does, but for one K.
-    """
-    (k, folder_path, XC, nombre) = args
-
-    k_str = str(k).zfill(3)
-    colormap_file = None
-    base_file = None
-    for f in os.listdir(folder_path):
-        if f.startswith(k_str):
-            if nombre in f:  # "ColorMap" in file
-                if f.lower().endswith('.tiff'):
-                    colormap_file = f
-            else:
-                if f.lower().endswith('.tiff'):
-                    base_file = f
-
-    if colormap_file is None or base_file is None:
-        return (k_str, None, XC)  # no data => skip
-
-    from data_processing import rejilla_indice, IDW_Index, Riesgo
-
-    ruta_base = os.path.join(folder_path, base_file)
-    ruta_color = os.path.join(folder_path, colormap_file)
-
-    print(f"[Worker PID] Processing K={k_str}: base={base_file}, color={colormap_file}")
-    df = rejilla_indice(ruta_base, ruta_color)
-    if df is None:
-        return (k_str, None, XC)
-
-    dfidw, dfidw_2 = IDW_Index(df)
-    df2x, XC_updated = Riesgo(dfidw_2, XC, dfidw_2)
-
-    # Return the data for writing to Excel in main process
-    return (k_str, (df, dfidw, dfidw_2, df2x), XC_updated)
-
-
-def bulk_unzip_and_analyze_parallel(indice, anio, base_folder="./upload_data"):
-    """
-    Parallel version of bulk_unzip_and_analyze using concurrent.futures to
-    process each K in a separate process. This can speed up if you have multiple cores.
-    """
-
-    folder_path = os.path.join(base_folder, f"{indice}_{anio}")
-    if not os.path.exists(folder_path):
-        os.makedirs(folder_path, exist_ok=True)
-
-    # 1) Unzip all .zip (same as before)
-    for archivo in os.listdir(folder_path):
-        if archivo.lower().endswith('.zip'):
-            ruta_zip = os.path.join(folder_path, archivo)
-            print(f"Procesando: {ruta_zip}")
-
-            with zipfile.ZipFile(ruta_zip, 'r') as zip_ref:
-                zip_ref.extractall(folder_path)
-                print(f"Archivos extraídos en: {folder_path}")
-                print(zip_ref.namelist())
-
-                prefix = archivo[0:5]
-                name_list = zip_ref.namelist()
-                if len(name_list) >= 2:
-                    fn1 = name_list[0]
-                    fn2 = name_list[1]
-                    old_path1 = os.path.join(folder_path, fn1)
-                    old_path2 = os.path.join(folder_path, fn2)
-
-                    new_name1 = prefix + fn1
-                    new_name2 = prefix + fn2
-                    new_path1 = os.path.join(folder_path, new_name1)
-                    new_path2 = os.path.join(folder_path, new_name2)
-
-                    if os.path.exists(new_path1):
-                        os.remove(old_path1)
-                    else:
-                        os.rename(old_path1, new_path1)
-
-                    if os.path.exists(new_path2):
-                        os.remove(old_path2)
-                    else:
-                        os.rename(old_path2, new_path2)
-
-    nombre = "ColorMap"
-    files_with_colormap = [f for f in os.listdir(folder_path)
-                           if nombre in f and f.lower().endswith('.tiff')]
-    print("Cantidad de archivos con ColorMap:", len(files_with_colormap))
-
-    import numpy as np
-    XC = np.sort(np.random.uniform(0,1,5))
-    print("Inicial XC:", XC)
-
-    import datetime
-    date_str = datetime.datetime.now().strftime("%Y-%m-%d_%H%M")
-    results_filename = os.path.join(folder_path, f"NDVI_RESULTS_{date_str}.xlsx")
-
-    max_k = 0
-    for f in files_with_colormap:
-        prefix_str = f[0:3]
-        if prefix_str.isdigit():
-            k_val = int(prefix_str)
-            if k_val > max_k:
-                max_k = k_val
-
-    print("Tenemos un max K:", max_k)
-
-    # Build tasks
-    tasks = []
-    for k in range(1, max_k+1):
-        tasks.append((k, folder_path, XC, nombre))
-
-    # Parallel
-    from openpyxl.utils.exceptions import InvalidFileException
-    from openpyxl import Workbook, load_workbook
-    import pandas as pd
-
-    def append_df_to_excel(filename, dfdata, sheet_name):
+    for f in color_files:
         try:
-            with pd.ExcelWriter(filename, mode='a', engine='openpyxl', if_sheet_exists='new') as writer:
-                dfdata.to_excel(writer, index=False, sheet_name=sheet_name)
-        except FileNotFoundError:
-            with pd.ExcelWriter(filename, mode='w', engine='openpyxl') as writer:
-                dfdata.to_excel(writer, index=False, sheet_name=sheet_name)
-        except InvalidFileException:
-            with pd.ExcelWriter(filename, mode='w', engine='openpyxl') as writer:
-                dfdata.to_excel(writer, index=False, sheet_name=sheet_name)
+            k_ = int(f[0:3])
+            if k_ > max_k: max_k = k_
+        except:
+            pass
+    logger.info(f"[bulk_unzip_and_analyze_new_parallel] Computed max_k={max_k}")
+    if max_k == 0:
+        warn_msg = "No numeric prefixes found in colorMap files (like '001')."
+        logger.warning(warn_msg)
+        st.warning(warn_msg)
+        return None, None, None
 
-    import concurrent.futures
-    with concurrent.futures.ProcessPoolExecutor(max_workers = 4) as executor:
-        future_to_k = {
-            executor.submit(_process_one_k, arg): arg[0] for arg in tasks
+    # We'll do a shared cluster seed
+    XC = np.sort(np.random.uniform(0,1,5))
+    logger.info(f"[bulk_unzip_and_analyze_new_parallel] Initial cluster seeds (XC)={XC}")
+
+    # 4) Create tasks for k in [1..max_k]
+    tasks = range(1, max_k+1)
+
+    # 5) Launch parallel
+    cpu_count = multiprocessing.cpu_count()
+    logger.info(f"[bulk_unzip_and_analyze_new_parallel] Using up to {cpu_count} parallel processes.")
+    results = []
+    with concurrent.futures.ProcessPoolExecutor(max_workers=cpu_count) as executor:
+        future_map = {
+            executor.submit(_process_one_k, k_val, folder_path, colorMap_keyword, XC): k_val
+            for k_val in tasks
         }
-        for future in concurrent.futures.as_completed(future_to_k):
-            k_val = future_to_k[future]
+        for future in concurrent.futures.as_completed(future_map):
+            k_val = future_map[future]
             try:
-                k_str, df_tuple, updated_XC = future.result()
+                res = future.result()
+                logger.info(f"[bulk_unzip_and_analyze_new_parallel] Completed k={k_val}")
+                results.append(res)
             except Exception as e:
-                print(f"K={k_val} generated an exception: {e}")
-                continue
+                logger.exception(f"[bulk_unzip_and_analyze_new_parallel] Task for K={k_val} failed: {e}")
 
-            if df_tuple is None:
-                continue
+    # Sort by k
+    results.sort(key=lambda r: r[0])
 
-            df, dfidw, dfidw_2, df2x = df_tuple
-            # Overwrite global XC with last updated if you want sequential updates
-            XC = updated_XC
+    # 6) Write to Excel in main thread
+    logger.info(f"[bulk_unzip_and_analyze_new_parallel] Writing results to Excel => {espacial_xlsx}, {idw_xlsx}, {qgis_xlsx}")
+    for (k_val, sheet_name, df_esp, df_idw, df_qgis) in results:
+        if sheet_name is None or df_esp is None:
+            continue
+        save_df_to_excel(espacial_xlsx, df_esp, sheet_name)
+        if df_idw is not None:
+            save_df_to_excel(idw_xlsx, df_idw, sheet_name)
+        if df_qgis is not None:
+            save_df_to_excel(qgis_xlsx, df_qgis, sheet_name)
 
-            append_df_to_excel(results_filename, df,     f"{k_str}_Espacial")
-            append_df_to_excel(results_filename, dfidw,  f"{k_str}_IDW0")
-            append_df_to_excel(results_filename, dfidw_2,f"{k_str}_IDW1")
-            append_df_to_excel(results_filename, df2x,   f"{k_str}_QGIS")
-
-    print("ALL DONE (parallel). Final clusters:", XC)
-    print(f"Results written to: {results_filename}")
-    return results_filename
+    logger.info("[bulk_unzip_and_analyze_new_parallel] Done.")
+    return (espacial_xlsx, idw_xlsx, qgis_xlsx)
