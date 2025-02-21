@@ -1,5 +1,5 @@
 import streamlit as st
-from ui import render_ui
+from app.ui import render_ui
 import config  # Ensures logging is set up
 
 def main():
