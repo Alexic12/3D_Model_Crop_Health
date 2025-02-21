@@ -1,7 +1,7 @@
 
 import pytest
 import pandas as pd
-from app.visualization_nw import create_3d_surface_plot
+from app.visualization import create_3d_surface_plot
 
 def test_create_3d_surface_plot_valid_data():
     # Create a sample DataFrame

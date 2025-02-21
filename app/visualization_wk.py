@@ -12,11 +12,8 @@ from scipy.ndimage import gaussian_filter
 import logging
 from io import BytesIO
 import matplotlib.image as mpimg
-import math
 
-# ======== MPLD3 for interactive hover tooltips ========
-import mpld3
-from mpld3 import plugins
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -24,38 +21,49 @@ logger = logging.getLogger(__name__)
 def compute_google_zoom(lat_min, lat_max, lon_min, lon_max, image_width=640):
     """
     Compute an approximate integer zoom level so that the bounding box
-    [lat_min..lat_max, lon_min..lon_max] fits entirely in a 640-pixel
-    Google Static Map.
+    [lat_min..lat_max, lon_min..lon_max] fits entirely in a 640-pixel Google Static Map.
     """
+    # Range in degrees
     lat_range = abs(lat_max - lat_min)
     lon_range = abs(lon_max - lon_min)
-    deg = max(lat_range, lon_range)
+    deg = max(lat_range, lon_range)  # whichever is bigger determines needed zoom
+
     if deg <= 0:
+        # Degenerate bounding box; default to some mid-level zoom
         return 14
 
+    # Degrees/pixel for zoom=0 is 360/256 = 1.40625 degrees/pixel
     base_dpp = 360.0 / 256.0
+
+    # Desired degrees/pixel to fit 'deg' degrees into 'image_width' pixels:
+    # deg <= dpp * image_width => dpp >= deg / image_width
     desired_dpp = deg / float(image_width)
+
+    # So we want: base_dpp / 2^z = desired_dpp => z = log2(base_dpp / desired_dpp)
     z_float = math.log2(base_dpp / desired_dpp)
     z_rounded = int(round(z_float))
+
+    # Clamp to [0..21]
     z_rounded = max(0, min(21, z_rounded))
     return z_rounded
-
 
 def fetch_google_static_map(lat_min, lat_max, lon_min, lon_max, api_key, img_size=(640, 640)):
     """
     Fetch a satellite image from Google Static Maps using a computed zoom
-    that ensures the bounding box [lat_min..lat_max, lon_min..lon_max]
-    is fully visible.
+    that ensures the bounding box [lat_min..lat_max, lon_min..lon_max] is fully visible.
     """
     if not api_key:
-        return None
+        return None  # No key => can't fetch
 
+    # Compute center
     center_lat = (lat_min + lat_max) / 2.0
     center_lon = (lon_min + lon_max) / 2.0
 
+    # Compute a continuous (integer) zoom to fit bounding box
     width, height = img_size
     zoom = compute_google_zoom(lat_min, lat_max, lon_min, lon_max, image_width=width)
 
+    # Build URL
     url = (
         "https://maps.googleapis.com/maps/api/staticmap"
         f"?center={center_lat},{center_lon}"
@@ -86,72 +94,69 @@ def create_2d_scatter_plot_ndvi(
     google_api_key=None,
     margin_frac=0.05
 ):
-    """
-    Original, non-interactive Matplotlib version
-    with a black figure background, white text, 
-    and a Google satellite map behind the points.
-    """
     try:
         plt.style.use('default')
-
+        
+        # Flatten NDVI if 2D
         if ndvi_matrix.ndim == 2:
             ndvi_data = ndvi_matrix.flatten()
         else:
             ndvi_data = ndvi_matrix
-
+        
+        # Flatten lat/lon if needed
         if lat.ndim == 1 and lon.ndim == 1:
-            X, Y = np.meshgrid(lon, lat)
+            X, Y = np.meshgrid(lon, lat)  # X=lon, Y=lat
             x_plot = X.flatten()
             y_plot = Y.flatten()
         else:
             x_plot = lon
             y_plot = lat
-
-        # figure
+        
         fig, ax = plt.subplots(figsize=(6, 5))
-
-        # Make the area outside the axes black
-        fig.patch.set_facecolor("black")
-        # Make the actual axes region transparent, so the map shows through
-        ax.set_facecolor("none")
-
+        fig.patch.set_facecolor('none')
+        ax.set_facecolor('none')
+        
+        # (Optional) Make text/spines white:
         ax.xaxis.label.set_color('white')
         ax.yaxis.label.set_color('white')
         ax.tick_params(axis='x', colors='white')
         ax.tick_params(axis='y', colors='white')
         for spine in ax.spines.values():
             spine.set_edgecolor('white')
-
         ax.set_title(f"NDVI Visualization - {sheet_name}", color='white')
-
+        
+        # Compute bounding box + margin
         lat_min, lat_max = np.min(y_plot), np.max(y_plot)
         lon_min, lon_max = np.min(x_plot), np.max(x_plot)
         lat_range = lat_max - lat_min
         lon_range = lon_max - lon_min
-        lat_min_adj = lat_min - margin_frac * lat_range
-        lat_max_adj = lat_max + margin_frac * lat_range
-        lon_min_adj = lon_min - margin_frac * lon_range
-        lon_max_adj = lon_max + margin_frac * lon_range
-
-        map_img = None
+        lat_min_adj = lat_min - margin_frac*lat_range
+        lat_max_adj = lat_max + margin_frac*lat_range
+        lon_min_adj = lon_min - margin_frac*lon_range
+        lon_max_adj = lon_max + margin_frac*lon_range
+        
+        # Fetch map (if you have a function fetch_google_static_map):
         if google_api_key:
             map_img = fetch_google_static_map(
                 lat_min_adj, lat_max_adj,
                 lon_min_adj, lon_max_adj,
                 google_api_key
             )
-
+        else:
+            map_img = None
+        
+        # Plot map in background
         if map_img is not None:
             ax.imshow(
                 map_img,
                 extent=[lon_min_adj, lon_max_adj, lat_min_adj, lat_max_adj],
-                origin='upper',
-                zorder=0
+                origin='upper'
             )
         ax.set_xlim(lon_min_adj, lon_max_adj)
         ax.set_ylim(lat_min_adj, lat_max_adj)
         ax.set_aspect('equal', 'box')
-
+        
+        # Scatter NDVI points
         sc = ax.scatter(
             x_plot,
             y_plot,
@@ -159,148 +164,34 @@ def create_2d_scatter_plot_ndvi(
             cmap='autumn',
             vmin=-1,
             vmax=1,
-            alpha=0.9,
-            zorder=1
+            alpha=0.9
         )
+        
+        # Axis labels
         ax.set_xlabel("X (Longitude)", color='white')
         ax.set_ylabel("Y (Latitude)", color='white')
-
+        
+        # OPTIONAL: Format axis ticks, e.g. 4 decimal places
         ax.xaxis.set_major_formatter(mticker.FormatStrFormatter('%.4f'))
         ax.yaxis.set_major_formatter(mticker.FormatStrFormatter('%.4f'))
-
+        
+        # Colorbar => use 'shrink' to make it shorter
         cbar = fig.colorbar(sc, ax=ax, label='NDVI Index', shrink=0.6)
+        
+        # Make colorbar text/spines white
         cbar.ax.yaxis.set_tick_params(color='white')
         cbar.outline.set_edgecolor('white')
         cbar.ax.yaxis.label.set_color('white')
         for lbl in cbar.ax.yaxis.get_ticklabels():
             lbl.set_color('white')
-
+        
         fig.tight_layout()
         return fig
+    
     except Exception as e:
         st.error(f"Error creating 2D scatter plot: {e}")
         return None
 
-
-def create_2d_scatter_plot_ndvi_interactive_qgis(
-    qgis_df: pd.DataFrame,
-    sheet_name="NDVI Sheet",
-    google_api_key=None,
-    margin_frac=0.05
-):
-    """
-    Interactive Matplotlib + mpld3 scatter that shows NDVI & Riesgo from QGIS data 
-    on black tooltip with white text. 
-    The figure background is black outside the axes, 
-    the axes region is transparent so the map is visible.
-    """
-    try:
-        # Check columns
-        for col in ["long-xm", "long-ym", "NDVI", "Riesgo"]:
-            if col not in qgis_df.columns:
-                st.error(f"Missing column '{col}' in QGIS DataFrame => cannot plot.")
-                return None
-
-        x_plot = qgis_df["long-xm"].values
-        y_plot = qgis_df["long-ym"].values
-        ndvi_vals = qgis_df["NDVI"].values
-        riesgo_vals = qgis_df["Riesgo"].values
-
-        plt.style.use('default')
-        fig, ax = plt.subplots(figsize=(6, 5))
-
-        # Make region outside the axes black, and axes region transparent
-        fig.patch.set_facecolor("black")
-        ax.set_facecolor("none")
-
-        # White text
-        ax.xaxis.label.set_color('white')
-        ax.yaxis.label.set_color('white')
-        ax.tick_params(axis='x', colors='white')
-        ax.tick_params(axis='y', colors='white')
-        for spine in ax.spines.values():
-            spine.set_edgecolor('white')
-
-        ax.set_title(f"Interactive NDVI - {sheet_name}", color='white')
-
-        # bounding box
-        lon_min, lon_max = x_plot.min(), x_plot.max()
-        lat_min, lat_max = y_plot.min(), y_plot.max()
-        lon_range = lon_max - lon_min
-        lat_range = lat_max - lat_min
-
-        lon_min_adj = lon_min - margin_frac * lon_range
-        lon_max_adj = lon_max + margin_frac * lon_range
-        lat_min_adj = lat_min - margin_frac * lat_range
-        lat_max_adj = lat_max + margin_frac * lat_range
-
-        # Fetch map
-        map_img = None
-        if google_api_key:
-            map_img = fetch_google_static_map(
-                lat_min_adj, lat_max_adj,
-                lon_min_adj, lon_max_adj,
-                google_api_key
-            )
-        if map_img is not None:
-            ax.imshow(
-                map_img,
-                extent=[lon_min_adj, lon_max_adj, lat_min_adj, lat_max_adj],
-                origin='upper',
-                zorder=0
-            )
-
-        ax.set_xlim(lon_min_adj, lon_max_adj)
-        ax.set_ylim(lat_min_adj, lat_max_adj)
-        ax.set_aspect('equal', 'box')
-
-        sc = ax.scatter(
-            x_plot,
-            y_plot,
-            c=ndvi_vals,
-            cmap='autumn',
-            vmin=-1,
-            vmax=1,
-            alpha=0.9,
-            zorder=1
-        )
-        ax.set_xlabel("Longitude", color='white')
-        ax.set_ylabel("Latitude", color='white')
-
-        ax.xaxis.set_major_formatter(mticker.FormatStrFormatter('%.4f'))
-        ax.yaxis.set_major_formatter(mticker.FormatStrFormatter('%.4f'))
-
-        cbar = fig.colorbar(sc, ax=ax, label='NDVI Index', shrink=0.6)
-        cbar.ax.yaxis.set_tick_params(color='white')
-        cbar.outline.set_edgecolor('white')
-        cbar.ax.yaxis.label.set_color('white')
-        for lbl in cbar.ax.yaxis.get_ticklabels():
-            lbl.set_color('white')
-
-        fig.tight_layout()
-
-        # Build tooltip labels => black background, white text
-        labels = []
-        for i in range(len(x_plot)):
-            nd = ndvi_vals[i]
-            rg = riesgo_vals[i]
-            # Inline styling => black BG, white text
-            lbl = (
-                f"<div style='background-color:black;color:white;padding:5px;'>"
-                f"NDVI={nd:.4f}<br>Riesgo={rg}"
-                f"</div>"
-            )
-            labels.append(lbl)
-
-        tooltip = plugins.PointLabelTooltip(sc, labels=labels)
-        plugins.connect(fig, tooltip)
-
-        html_str = mpld3.fig_to_html(fig)
-        return html_str
-    except Exception as e:
-        st.error(f"Error creating interactive QGIS 2D scatter: {e}")
-        logger.exception("Error in create_2d_scatter_plot_ndvi_interactive_qgis")
-        return None
 
 
 def create_3d_surface_plot(
@@ -310,8 +201,13 @@ def create_3d_surface_plot(
     z_scale=1.0,
     smoothness=0.0
 ):
+    """
+    Create a Plotly 3D surface using NDVI values from a DataFrame 
+    containing columns "Longitud", "Latitud", "NDVI".
+    """
     try:
         logger.info("Creating 3D surface plot (colored by NDVI)")
+
         x = data['Longitud'].values
         y = data['Latitud'].values
         z = data['NDVI'].values
@@ -320,6 +216,7 @@ def create_3d_surface_plot(
         yi = np.linspace(y.min(), y.max(), grid_size)
         xi, yi = np.meshgrid(xi, yi)
 
+        # Interpolate NDVI
         points = np.column_stack((x, y))
         zi = griddata(points, z, (xi, yi), method='linear')
         zi = np.nan_to_num(zi, nan=0.0)
@@ -382,6 +279,9 @@ def create_3d_simulation_plot_sea_keypoints(
     z_min=-0.3,
     z_max=0.9
 ):
+    """
+    Animated "sea-like" wave simulation on top of NDVI base.
+    """
     try:
         x = data['Longitud'].values
         y = data['Latitud'].values
@@ -427,7 +327,7 @@ def create_3d_simulation_plot_sea_keypoints(
 
         frames = []
         for frame_i in range(key_frames):
-            t = frame_i / (key_frames - 1) if key_frames > 1 else 0.0
+            t = frame_i / (key_frames - 1) if key_frames>1 else 0.0
             numerator = np.zeros_like(base_z)
             denominator = np.zeros_like(base_z)
 
@@ -507,6 +407,7 @@ def create_3d_simulation_plot_sea_keypoints(
             ]
         )
         return fig
+
     except Exception as e:
         st.error(f"Error in sea simulation: {e}")
         logger.exception("Sea simulation error")
@@ -534,8 +435,8 @@ def create_3d_simulation_plot_time_interpolation(
         lat_max = float('-inf')
         lon_min = float('inf')
         lon_max = float('-inf')
-        flattened = []
 
+        flattened = []
         for s in sheet_order:
             la = data_sheets[s]["lat"]
             lo = data_sheets[s]["lon"]
@@ -545,7 +446,9 @@ def create_3d_simulation_plot_time_interpolation(
             lon_min = min(lon_min, lo.min())
             lon_max = max(lon_max, lo.max())
 
-            x_vals, y_vals, z_vals = [], [], []
+            x_vals = []
+            y_vals = []
+            z_vals = []
             M = len(la)
             N = len(lo)
             for i in range(M):
@@ -581,7 +484,7 @@ def create_3d_simulation_plot_time_interpolation(
             end_grid = ndvi_grids[i + 1]
             for step in range(1, steps_between_sheets + 1):
                 alpha = step / float(steps_between_sheets)
-                ndvi_interp = (1 - alpha)*start_grid + alpha*end_grid
+                ndvi_interp = (1 - alpha) * start_grid + alpha * end_grid
                 fr_data = go.Surface(
                     x=xi,
                     y=yi,
@@ -592,7 +495,9 @@ def create_3d_simulation_plot_time_interpolation(
                     cmin=global_min,
                     cmax=global_max
                 )
-                frames.append(go.Frame(data=[fr_data], name=f"frame_{i}_{step}"))
+                frames.append(
+                    go.Frame(data=[fr_data], name=f"frame_{i}_{step}")
+                )
 
         fig = go.Figure(
             data=[go.Surface(
@@ -636,11 +541,9 @@ def create_3d_simulation_plot_time_interpolation(
                             method='animate',
                             args=[
                                 [None],
-                                {
-                                    "frame": {"duration": 0, "redraw": False},
-                                    "transition": {"duration": 0},
-                                    "mode": "immediate"
-                                }
+                                {"frame": {"duration": 0, "redraw": False},
+                                 "transition": {"duration": 0},
+                                 "mode": "immediate"}
                             ]
                         )
                     ]
@@ -648,6 +551,7 @@ def create_3d_simulation_plot_time_interpolation(
             ]
         )
         return fig
+
     except Exception as e:
         st.error(f"Time-series simulation error: {e}")
         logger.exception("Time-series simulation error")
