@@ -148,7 +148,7 @@ def render_ui():
         steps_value = st.slider("Time interpolation steps", 1, 20, 10)
         st.write("---")
 
-        google_api_key = st.text_input("Google Maps API Key", value="")
+        google_api_key = st.text_input("Google Maps API Key", value="AIzaSyB1Vv2XMsTy1AxEowrzOaI5Sn96ffC6HNY")
 
         # Bulk NDVI analysis
         st.subheader("Bulk NDVI ZIP Analysis")
@@ -285,7 +285,7 @@ def render_ui():
 
     # ---------- BLOCK 2: Processed Data Visualization ----------
     if show_proc and (processed_path is not None) and os.path.exists(processed_path):
-        st.write(f"### Visualizing Processed Data from: {processed_path}")
+        #st.write(f"### Visualizing Processed Data from: {processed_path}")
 
         data_sheets = load_timeseries_data(processed_path)
         if data_sheets:

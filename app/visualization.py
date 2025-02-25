@@ -14,9 +14,15 @@ from io import BytesIO
 import matplotlib.image as mpimg
 import math
 
-# ======== MPLD3 for interactive hover tooltips ========
 import mpld3
 from mpld3 import plugins
+
+
+
+
+
+# ======== MPLD3 for interactive hover tooltips ========
+
 
 logger = logging.getLogger(__name__)
 
@@ -91,23 +97,29 @@ def create_2d_scatter_plot_ndvi(
     with a black figure background, white text, 
     and a Google satellite map behind the points.
     """
+    import matplotlib.pyplot as plt
+    import matplotlib.ticker as mticker
+    import numpy as np
+
     try:
         plt.style.use('default')
 
+        # Flatten NDVI if 2D
         if ndvi_matrix.ndim == 2:
             ndvi_data = ndvi_matrix.flatten()
         else:
             ndvi_data = ndvi_matrix
 
+        # Flatten lat/lon if needed
         if lat.ndim == 1 and lon.ndim == 1:
-            X, Y = np.meshgrid(lon, lat)
+            X, Y = np.meshgrid(lon, lat)  # X=lon, Y=lat
             x_plot = X.flatten()
             y_plot = Y.flatten()
         else:
             x_plot = lon
             y_plot = lat
 
-        # figure
+        # Create figure
         fig, ax = plt.subplots(figsize=(6, 5))
 
         # Make the area outside the axes black
@@ -115,15 +127,16 @@ def create_2d_scatter_plot_ndvi(
         # Make the actual axes region transparent, so the map shows through
         ax.set_facecolor("none")
 
-        ax.xaxis.label.set_color('white')
-        ax.yaxis.label.set_color('white')
+        # White text for axes, ticks, spines
+        ax.set_title(f"NDVI Visualization - {sheet_name}", color='white')
+        ax.set_xlabel("X (Longitude)", color='white')
+        ax.set_ylabel("Y (Latitude)", color='white')
         ax.tick_params(axis='x', colors='white')
         ax.tick_params(axis='y', colors='white')
         for spine in ax.spines.values():
             spine.set_edgecolor('white')
 
-        ax.set_title(f"NDVI Visualization - {sheet_name}", color='white')
-
+        # Determine bounding box
         lat_min, lat_max = np.min(y_plot), np.max(y_plot)
         lon_min, lon_max = np.min(x_plot), np.max(x_plot)
         lat_range = lat_max - lat_min
@@ -133,6 +146,7 @@ def create_2d_scatter_plot_ndvi(
         lon_min_adj = lon_min - margin_frac * lon_range
         lon_max_adj = lon_max + margin_frac * lon_range
 
+        # Attempt to fetch Google Maps background
         map_img = None
         if google_api_key:
             map_img = fetch_google_static_map(
@@ -141,6 +155,7 @@ def create_2d_scatter_plot_ndvi(
                 google_api_key
             )
 
+        # If map is found, display it behind the points
         if map_img is not None:
             ax.imshow(
                 map_img,
@@ -148,35 +163,39 @@ def create_2d_scatter_plot_ndvi(
                 origin='upper',
                 zorder=0
             )
+
+        # Set bounding box, aspect ratio
         ax.set_xlim(lon_min_adj, lon_max_adj)
         ax.set_ylim(lat_min_adj, lat_max_adj)
         ax.set_aspect('equal', 'box')
 
+        # Plot the scatter with NDVI
         sc = ax.scatter(
             x_plot,
             y_plot,
             c=ndvi_data,
-            cmap='autumn',
+            cmap='Viridis',
             vmin=-1,
             vmax=1,
             alpha=0.9,
             zorder=1
         )
-        ax.set_xlabel("X (Longitude)", color='white')
-        ax.set_ylabel("Y (Latitude)", color='white')
 
+        # Format axis tick labels with 4 decimals
         ax.xaxis.set_major_formatter(mticker.FormatStrFormatter('%.4f'))
         ax.yaxis.set_major_formatter(mticker.FormatStrFormatter('%.4f'))
 
+        # Colorbar => also white text & black outline
         cbar = fig.colorbar(sc, ax=ax, label='NDVI Index', shrink=0.6)
-        cbar.ax.yaxis.set_tick_params(color='white')
         cbar.outline.set_edgecolor('white')
+        cbar.ax.yaxis.set_tick_params(color='white')
         cbar.ax.yaxis.label.set_color('white')
         for lbl in cbar.ax.yaxis.get_ticklabels():
             lbl.set_color('white')
 
         fig.tight_layout()
         return fig
+
     except Exception as e:
         st.error(f"Error creating 2D scatter plot: {e}")
         return None
@@ -189,41 +208,48 @@ def create_2d_scatter_plot_ndvi_interactive_qgis(
     margin_frac=0.05
 ):
     """
-    Interactive Matplotlib + mpld3 scatter that shows NDVI & Riesgo from QGIS data 
-    on black tooltip with white text. 
-    The figure background is black outside the axes, 
-    the axes region is transparent so the map is visible.
+    Interactive Matplotlib + mpld3 scatter that shows NDVI & Riesgo from QGIS data
+    on a black tooltip with white text. The figure background is black outside the axes,
+    and the axes region is transparent so the map is visible behind the points.
     """
+    
     try:
-        # Check columns
+        # 1) Ensure required columns
         for col in ["long-xm", "long-ym", "NDVI", "Riesgo"]:
             if col not in qgis_df.columns:
                 st.error(f"Missing column '{col}' in QGIS DataFrame => cannot plot.")
                 return None
 
-        x_plot = qgis_df["long-xm"].values
-        y_plot = qgis_df["long-ym"].values
+        x_plot = qgis_df["long-xm"].values  # longitude
+        y_plot = qgis_df["long-ym"].values  # latitude
         ndvi_vals = qgis_df["NDVI"].values
         riesgo_vals = qgis_df["Riesgo"].values
 
+        # 2) Compute color limits (matching 3D plot)
+        cmin, cmax = np.min(ndvi_vals), np.max(ndvi_vals)
+
+        # 3) Create figure with black outer background, transparent axes
         plt.style.use('default')
+        plt.rcParams.update({'xtick.color': 'white', 'ytick.color': 'white'})  # ✅ Fix tick colors
         fig, ax = plt.subplots(figsize=(6, 5))
+        fig.patch.set_facecolor("black")  # outside area
+        ax.set_facecolor("black")         # axes region => black
 
-        # Make region outside the axes black, and axes region transparent
-        fig.patch.set_facecolor("black")
-        ax.set_facecolor("none")
+        # 4) ✅ Explicitly Set White Labels for Title, X, and Y
+        ax.set_xlabel("Longitude", fontsize=12, fontweight='bold', color='white')  
+        ax.set_ylabel("Latitude", fontsize=12, fontweight='bold', color='white')
+        ax.set_title(f"Interactive NDVI - {sheet_name}", fontsize=14, fontweight='bold', color='white')
 
-        # White text
-        ax.xaxis.label.set_color('white')
-        ax.yaxis.label.set_color('white')
-        ax.tick_params(axis='x', colors='white')
-        ax.tick_params(axis='y', colors='white')
+        # ✅ Fix Tick Labels manually
+        for label in ax.get_xticklabels():
+            label.set_color('white')
+        for label in ax.get_yticklabels():
+            label.set_color('white')
+
         for spine in ax.spines.values():
             spine.set_edgecolor('white')
 
-        ax.set_title(f"Interactive NDVI - {sheet_name}", color='white')
-
-        # bounding box
+        # 5) Compute bounding box
         lon_min, lon_max = x_plot.min(), x_plot.max()
         lat_min, lat_max = y_plot.min(), y_plot.max()
         lon_range = lon_max - lon_min
@@ -234,7 +260,7 @@ def create_2d_scatter_plot_ndvi_interactive_qgis(
         lat_min_adj = lat_min - margin_frac * lat_range
         lat_max_adj = lat_max + margin_frac * lat_range
 
-        # Fetch map
+        # 6) Fetch Google Static Map if key is present
         map_img = None
         if google_api_key:
             map_img = fetch_google_static_map(
@@ -242,6 +268,11 @@ def create_2d_scatter_plot_ndvi_interactive_qgis(
                 lon_min_adj, lon_max_adj,
                 google_api_key
             )
+            print("AVAILABLE Map Key---------------------------")
+        else:
+            print("NO Map Key---------------------------")
+
+        # 7) If map is available, show it behind the points
         if map_img is not None:
             ax.imshow(
                 map_img,
@@ -254,49 +285,127 @@ def create_2d_scatter_plot_ndvi_interactive_qgis(
         ax.set_ylim(lat_min_adj, lat_max_adj)
         ax.set_aspect('equal', 'box')
 
+        # 8) Scatter plot of NDVI (using Viridis colormap)
         sc = ax.scatter(
             x_plot,
             y_plot,
             c=ndvi_vals,
-            cmap='autumn',
-            vmin=-1,
-            vmax=1,
+            cmap='viridis',  # ✅ Changed to Viridis
+            vmin=cmin,  # ✅ Use same scale as 3D plot
+            vmax=cmax,  # ✅ Use same scale as 3D plot
             alpha=0.9,
-            zorder=1
+            s=300,  # point size
+            zorder=1  # points on top
         )
-        ax.set_xlabel("Longitude", color='white')
-        ax.set_ylabel("Latitude", color='white')
 
+        # Format tick labels (4 decimals)
         ax.xaxis.set_major_formatter(mticker.FormatStrFormatter('%.4f'))
         ax.yaxis.set_major_formatter(mticker.FormatStrFormatter('%.4f'))
 
-        cbar = fig.colorbar(sc, ax=ax, label='NDVI Index', shrink=0.6)
-        cbar.ax.yaxis.set_tick_params(color='white')
-        cbar.outline.set_edgecolor('white')
-        cbar.ax.yaxis.label.set_color('white')
-        for lbl in cbar.ax.yaxis.get_ticklabels():
-            lbl.set_color('white')
+        # 9) ✅ Manually Set Tick Label Colors (Fix for mpld3)
+        for label in ax.get_xticklabels():
+            label.set_fontsize(10)
+            label.set_color('white')
+        for label in ax.get_yticklabels():
+            label.set_fontsize(10)
+            label.set_color('white')
 
         fig.tight_layout()
 
-        # Build tooltip labels => black background, white text
+        # 10) Build tooltip labels => use only plain text (NO HTML)
         labels = []
         for i in range(len(x_plot)):
             nd = ndvi_vals[i]
             rg = riesgo_vals[i]
-            # Inline styling => black BG, white text
             lbl = (
-                f"<div style='background-color:black;color:white;padding:5px;'>"
+                f"<div class='custom-tooltip' "
+                f"style='background-color:black; color:white; padding:8px; "
+                f"border: 1px solid white; border-radius:5px;'>"
                 f"NDVI={nd:.4f}<br>Riesgo={rg}"
                 f"</div>"
             )
             labels.append(lbl)
 
-        tooltip = plugins.PointLabelTooltip(sc, labels=labels)
+        # 11) Attach interactive tooltip
+        tooltip = plugins.PointHTMLTooltip(sc, labels=labels, css="font-size:12px; font-family:sans-serif;")
         plugins.connect(fig, tooltip)
 
+        # 12) Convert figure to HTML
         html_str = mpld3.fig_to_html(fig)
+
+        # ✅ Inject JavaScript to reposition tooltips dynamically
+        custom_js = """
+        <script>
+            function adjustTooltipPosition(event, d) {
+                let tooltip = document.querySelector(".mpld3-tooltip");
+                if (!tooltip) return;
+
+                let chartWidth = window.innerWidth;
+                let chartHeight = window.innerHeight;
+                let tooltipWidth = tooltip.offsetWidth;
+                let tooltipHeight = tooltip.offsetHeight;
+
+                let mouseX = event.pageX;
+                let mouseY = event.pageY;
+
+                // Adjust for right edge
+                if (mouseX + tooltipWidth > chartWidth) {
+                    tooltip.style.left = (mouseX - tooltipWidth - 10) + "px";
+                } else {
+                    tooltip.style.left = (mouseX + 10) + "px";
+                }
+
+                // Adjust for bottom edge
+                if (mouseY + tooltipHeight > chartHeight) {
+                    tooltip.style.top = (mouseY - tooltipHeight - 10) + "px";
+                } else {
+                    tooltip.style.top = (mouseY + 10) + "px";
+                }
+            }
+
+            document.addEventListener("mousemove", function(event) {
+                let tooltip = document.querySelector(".mpld3-tooltip");
+                if (tooltip) {
+                    adjustTooltipPosition(event);
+                }
+            });
+        </script>
+        """
+
+        # ✅ Inject CSS to ensure tooltip stays visible and well formatted
+        custom_css = """
+        <style>
+            /* Make axis labels, tick labels, and title white and bold */
+            .mpld3-xaxis text, .mpld3-yaxis text,
+            .mpld3-axes text, .mpld3-title text {
+                fill: white !important;
+                font-weight: bold !important;
+            }
+
+            /* Fix mpld3 tooltip styles */
+            .mpld3-tooltip {
+                background-color: black !important;
+                color: white !important;
+                font-weight: bold !important;
+                border: 1px solid white !important;
+                padding: 5px;
+                border-radius: 5px;
+                position: absolute;
+                z-index: 1000;
+                pointer-events: none;
+                max-width: 200px;
+                word-wrap: break-word;
+            }
+        </style>
+        """
+
+        # ✅ Combine the CSS, JS, and mpld3 output
+        html_str = custom_css + html_str + custom_js
+
         return html_str
+
+
+
     except Exception as e:
         st.error(f"Error creating interactive QGIS 2D scatter: {e}")
         logger.exception("Error in create_2d_scatter_plot_ndvi_interactive_qgis")
@@ -312,8 +421,8 @@ def create_3d_surface_plot(
 ):
     try:
         logger.info("Creating 3D surface plot (colored by NDVI)")
-        x = data['Longitud'].values
-        y = data['Latitud'].values
+        y = data['Longitud'].values
+        x = data['Latitud'].values
         z = data['NDVI'].values
 
         xi = np.linspace(x.min(), x.max(), grid_size)
@@ -560,8 +669,8 @@ def create_3d_simulation_plot_time_interpolation(
         xi, yi = np.meshgrid(xi, yi)
 
         ndvi_grids = []
-        global_min = float('inf')
-        global_max = float('-inf')
+        global_min = 0.35
+        global_max = 0.9
 
         for (xv, yv, zv) in flattened:
             points = np.column_stack((xv, yv))
@@ -570,8 +679,6 @@ def create_3d_simulation_plot_time_interpolation(
             if smoothness > 0:
                 z_grid = gaussian_filter(z_grid, sigma=smoothness, mode='nearest')
             z_grid *= z_scale
-            global_min = min(global_min, z_grid.min())
-            global_max = max(global_max, z_grid.max())
             ndvi_grids.append(z_grid)
 
         frames = []
@@ -581,7 +688,7 @@ def create_3d_simulation_plot_time_interpolation(
             end_grid = ndvi_grids[i + 1]
             for step in range(1, steps_between_sheets + 1):
                 alpha = step / float(steps_between_sheets)
-                ndvi_interp = (1 - alpha)*start_grid + alpha*end_grid
+                ndvi_interp = (1 - alpha) * start_grid + alpha * end_grid
                 fr_data = go.Surface(
                     x=xi,
                     y=yi,
@@ -594,6 +701,7 @@ def create_3d_simulation_plot_time_interpolation(
                 )
                 frames.append(go.Frame(data=[fr_data], name=f"frame_{i}_{step}"))
 
+        # ✅ Fixed: White Axis Labels & Tick Labels
         fig = go.Figure(
             data=[go.Surface(
                 x=xi,
@@ -607,15 +715,26 @@ def create_3d_simulation_plot_time_interpolation(
             )],
             frames=frames
         )
+
         fig.update_layout(
             title='Time-Series Interpolation of NDVI',
             width=900,
             height=900,
             scene=dict(
-                xaxis_title='Longitude',
-                yaxis_title='Latitude',
-                zaxis_title='NDVI',
-                zaxis=dict(range=[global_min, global_max])
+                xaxis=dict(
+                    title=dict(text='Longitude', font=dict(color="white")),
+                    tickfont=dict(color="white"),
+                    color="white"  # ✅ Forces white axis elements
+                ),
+                yaxis=dict(
+                    title=dict(text='Latitude', font=dict(color="white")),  # ✅ White Title
+                    tickfont=dict(color="white")  # ✅ White Tick Labels
+                ),
+                zaxis=dict(
+                    title=dict(text='NDVI', font=dict(color="white")),  # ✅ White Title
+                    tickfont=dict(color="white"),  # ✅ White Tick Labels
+                    range=[global_min, global_max]
+                )
             ),
             updatemenus=[
                 dict(
