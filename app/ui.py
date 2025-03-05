@@ -138,7 +138,7 @@ def render_ui():
         steps_value = st.slider("Time interpolation steps", 1, 20, 10)
         st.write("---")
 
-        google_api_key = st.text_input("Google Maps API Key", value="AIzaSy...FAKE_EXAMPLE")
+        google_api_key = st.text_input("Google Maps API Key", value="AIzaSyB1Vv2XMsTy1AxEowrzOaI5Sn96ffC6HNY")
 
         st.subheader("Bulk NDVI ZIP Analysis")
         zip_files = st.file_uploader("Upload .zip pairs containing base + ColorMap",
