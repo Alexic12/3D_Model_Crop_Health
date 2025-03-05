@@ -3,7 +3,9 @@ import logging
 import pandas as pd
 import numpy as np
 import os
-
+from dotenv import load_dotenv
+# Load environment variables from .env file
+load_dotenv()
 # Re-import the same modules you had
 import streamlit.components.v1 as components
 
@@ -137,8 +139,10 @@ def render_ui():
         color_map = st.selectbox("Color Map", ["Viridis", "Plasma", "Inferno", "Magma", "Cividis"])
         steps_value = st.slider("Time interpolation steps", 1, 20, 10)
         st.write("---")
-
-        google_api_key = st.text_input("Google Maps API Key", value="AIzaSyB1Vv2XMsTy1AxEowrzOaI5Sn96ffC6HNY")
+        apikey = os.getenv("GOOGLE_MAPS_API_KEY")
+        print(f"API Key: {apikey}")
+        #google_api_key = st.text_input("Google Maps API Key", value=apikey)
+        google_api_key = apikey
 
         st.subheader("Bulk NDVI ZIP Analysis")
         zip_files = st.file_uploader("Upload .zip pairs containing base + ColorMap",
