@@ -1,21 +1,32 @@
+"""
+ui.py
+
+Streamlit UI code for Crop Health Visualization, referencing HPC logic from data_processing.py
+and your 3D/2D plotting from app.visualization.
+"""
+
 import streamlit as st
 import logging
 import pandas as pd
 import numpy as np
 import os
 from dotenv import load_dotenv
-# Load environment variables from .env file
-load_dotenv()
-# Re-import the same modules you had
-import streamlit.components.v1 as components
 
+# HPC imports from your data_processing
 from data_processing import (
     process_uploaded_file,
     load_timeseries_data,
     invert_climate_file_rows,
-    bulk_unzip_and_analyze_new_parallel
+    bulk_unzip_and_analyze_new_parallel,
+    Prospectiva,  # HPC function if needed directly
+    run_full_hpc_pipeline
 )
 
+import plotly.graph_objects as go
+from scipy.stats import gaussian_kde
+
+# app.visualization references
+import streamlit.components.v1 as components
 from app.visualization import (
     create_2d_scatter_plot_ndvi,
     create_2d_scatter_plot_ndvi_interactive_qgis,
@@ -24,41 +35,24 @@ from app.visualization import (
     create_3d_simulation_plot_time_interpolation
 )
 
-# For the "Risk Visualization" 2D map with click:
-import plotly.express as px
-import plotly.graph_objs as go
-
 logger = logging.getLogger(__name__)
 
+# Load environment variables from .env file (e.g., for Google Maps API)
+load_dotenv()
 
 def compute_risk_results_via_hpc(indice, anio):
     """
-    Example function that calls your HPC pipeline code
-    (the same code that was in your notebook).
+    Example function that calls your HPC pipeline code (the same code that was in your notebook).
     Then it reads the final 'Prospective_...' files or 'Prospective_LDA_...' files
     to build a 2D map of points + monthly distributions, etc.
 
-    For demonstration, we will do something simple: 
-    (1) Call run_full_hpc_pipeline() 
-    (2) Then parse the final Excel outputs.
-    (3) Return df_map, risk_info.
-
-    If you want to run HPC only once, you might store the results in 'st.session_state'.
+    Currently, it just returns mock data for demonstration.
     """
+    # (A) If you want to run HPC every time:
+    #    hpc_data = run_full_hpc_pipeline(indice, anio)
+    #    # parse hpc_data as needed
 
-    # 1) Optionally run your HPC code (which reads the input, inverts Excel, does Emision, etc.)
-    #    This step is TOTALLY up to you if you want to re-run the HPC pipeline each time or only once.
-    #    We keep it commented out for performance reasons. 
-    # run_full_hpc_pipeline()
-
-    # 2) Suppose after HPC, we have these final outputs:
-    #    '/content/drive/MyDrive/Software-EAFIT-DMU/Software_Puerta/{indice}_{anio}/Prospective_{indice}_{int(anio)+1}.xlsx'
-    #    '/content/drive/MyDrive/Software-EAFIT-DMU/Software_Puerta/{indice}_{anio}/Prospective_LDA_{indice}_{int(anio)+1}.xlsx'
-    #
-    # We would parse them to get per-point monthly distributions. 
-    # For demonstration, we'll just mock it:
-
-    # Suppose we have 5 points, as in the previous placeholder:
+    # (B) For now, we just create mock data
     df_map = pd.DataFrame({
         "point_id": [0,1,2,3,4],
         "Lon": [-74.05, -74.02, -74.00, -73.98, -73.95],
@@ -141,7 +135,6 @@ def render_ui():
         st.write("---")
         apikey = os.getenv("GOOGLE_MAPS_API_KEY")
         print(f"API Key: {apikey}")
-        #google_api_key = st.text_input("Google Maps API Key", value=apikey)
         google_api_key = apikey
 
         st.subheader("Bulk NDVI ZIP Analysis")
@@ -242,6 +235,7 @@ def render_ui():
                     google_api_key=google_api_key
                 )
 
+                # Build DataFrame for 3D
                 x_vals, y_vals, z_vals = [], [], []
                 for i, latv in enumerate(lat_arr):
                     for j, lonv in enumerate(lon_arr):
@@ -393,7 +387,31 @@ def render_ui():
     elif page_mode == "Risk Visualization":
         st.write("## Risk Visualization")
 
-        # Locate processed file (IDW)
+        # -------------------------------------------------------------------------
+        # 1) HPC Data Option: The user can run HPC or re-use session data
+        # -------------------------------------------------------------------------
+        # "Run HPC Now" button triggers run_full_hpc_pipeline(indice, anio)
+        # Once computed, HPC data is stored in st.session_state["hpc_data"].
+
+        if "hpc_data" not in st.session_state:
+            st.warning("No HPC data found in session. Click the button to run HPC with real data.")
+            if st.button("Run HPC Pipeline"):
+                try:
+                    # 'indice' and 'anio' come from the text inputs in the sidebar
+                    hpc_data = run_full_hpc_pipeline(indice, anio, base_folder="./upload_data")
+                    if hpc_data is None:
+                        st.error("HPC pipeline returned None. Check logs or file paths.")
+                    else:
+                        st.session_state["hpc_data"] = hpc_data
+                        st.success("HPC pipeline completed! Data stored in session.")
+                except Exception as e:
+                    st.error(f"Error running HPC pipeline => {e}")
+        else:
+            st.info("HPC Data is already in session. Below you can visualize the results.")
+
+        # -------------------------------------------------------------------------
+        # 2) IDW/QGIS Visualization (like your original code)
+        # -------------------------------------------------------------------------
         idw_file = os.path.join(
             os.path.dirname(os.path.dirname(__file__)),
             "assets", "data",
@@ -409,8 +427,11 @@ def render_ui():
             processed_disabled = False
             processed_path = idw_file
 
-        # Try to load processed timeseries data
-        data_sheets = load_timeseries_data(processed_path)
+        # Attempt to load processed IDW data for 2D/3D map visuals
+        data_sheets = None
+        if processed_path and os.path.exists(processed_path):
+            data_sheets = load_timeseries_data(processed_path)
+
         if data_sheets:
             sheet_list = list(data_sheets.keys())
             chosen_sheet_processed = st.selectbox(
@@ -418,9 +439,19 @@ def render_ui():
                 sheet_list,
                 key="processed_sheet_selector"
             )
+            hpc_data = st.session_state["hpc_data"]
+            if "hpc_data" in st.session_state:
+                
+                results = hpc_data.get("results", [])
+                point_labels = [f" (Point={r['point_idx']})" for r in results]
+                chosen_point = st.selectbox("Select HPC point result", point_labels)
+                chosen_idx = point_labels.index(chosen_point)
+                HPC_info = results[chosen_idx]
 
             col1, col2 = st.columns(2)
+
             with col1:
+                # QGIS file to create the 2D scatter with interactive tooltips
                 qgis_file = os.path.join(
                     os.path.dirname(os.path.dirname(__file__)),
                     "assets", "data",
@@ -447,97 +478,140 @@ def render_ui():
                                 st.error("Could not create interactive QGIS chart.")
                     except Exception as e:
                         st.error(f"Error reading QGIS => {e}")
+
             with col2:
-                from data_processing import Prospectiva
+                # You might show a 3D surface or multi-time animation for the chosen sheet
+                lat_arr = data_sheets[chosen_sheet_processed]["lat"]
+                lon_arr = data_sheets[chosen_sheet_processed]["lon"]
+                ndvi_mat = data_sheets[chosen_sheet_processed]["ndvi"]
 
-                # For demonstration purposes, create dummy input values.
-                n_var = 5
-                n_components = 5
-                # Create dummy climate input data (as a DataFrame) with n_var+1 columns.
-                dummy_XD = pd.DataFrame(np.random.rand(100, n_var + 1))
-                # Dummy risk clusters vector (for a given point)
-                dummy_XCr = np.random.randint(0, n_components, size=(100, 1))
-                # Dummy pattern for each variable (5 variables x 12 months)
-                dummy_V = np.random.randint(0, 5, size=(n_var, 12))
-                # Dummy transition matrix and emission matrices
-                dummy_aTr = np.random.rand(n_components, n_components)
-                dummy_bEm = np.random.rand(n_var, n_components, n_components)
-                # Dummy monthly climate information (12 months x 5 variables)
-                dummy_ydmes = np.random.rand(12, n_var)
-                # Run Prospectiva to obtain risk evolution outputs:
-                VC, XInf2, XLDA = Prospectiva(0, dummy_XD, dummy_XCr, dummy_V, dummy_aTr, dummy_bEm, dummy_ydmes)
+                x_vals, y_vals, z_vals = [], [], []
+                for i, latv in enumerate(lat_arr):
+                    for j, lonv in enumerate(lon_arr):
+                        x_vals.append(lonv)
+                        y_vals.append(latv)
+                        z_vals.append(ndvi_mat[i, j])
 
-                # --- Build an interactive risk density plot using Plotly ---
-                st.markdown("### Risk Evolution Smooth Density Curves")
-                import plotly.graph_objects as go
-                from scipy.stats import gaussian_kde
+                st.markdown("##Monthly Risk Evolution")
 
-                fig = go.Figure()
+                # If HPC data is in session, let user select which point to visualize
+                if "hpc_data" in st.session_state:
+                    hpc_data = st.session_state["hpc_data"]
+                    results = hpc_data.get("results", [])
+                    if not results:
+                        st.warning("HPC pipeline returned no points. Possibly QGIS file had no data.")
+                    else:
+                        ##print r keys using results[0].keys() and f print
+                        print(f"**********///////////*******Keys in results: {results[0].keys()}")
 
-                # For each month (assumed to be 12 months)
-                for m in range(dummy_V.shape[1]):
-                    # Get the loss data for month m
-                    month_data = XLDA[:, m]
-                    
-                    # Compute the kernel density estimate
-                    kde = gaussian_kde(month_data)
-                    # Define an x-range from min to max of the data
-                    x_range = np.linspace(month_data.min(), month_data.max(), 200)
-                    density = kde(x_range)
-                    
-                    # Add a smooth line trace
-                    fig.add_trace(go.Scatter(
-                        x=x_range,
-                        y=density,
-                        mode='lines',
-                        name=f'Month {m+1}',
-                        hovertemplate="Month: %{text}<br>Loss: %{x:.2f}<br>Density: %{y:.2f}",
-                        text=[f"Month {m+1}"] * len(x_range)
-                    ))
+                        
 
-                fig.update_layout(
-                    title="Monthly Risk Evolution (Smooth Density)",
-                    xaxis_title="Losses (USD/Month-Zone)",
-                    yaxis_title="Density"
-                )
+                        XLDA = HPC_info["XLDA"]   # shape [1000 x 12]
+                        VC = HPC_info["VC"]       # list of length 12
+                        XInf2 = HPC_info["XInf"]  # shape [12 x 12]
 
-                st.plotly_chart(fig, use_container_width=True)
-                    
+                        # ---- Plot the filled-area KDE for real HPC data
 
-        # Below the row: Create and display a dummy risk data table
-        indice = "Dummy_Index"
-        num_rows = 10  # change as needed
-        VC_dummy = np.random.rand(num_rows)
-        XInf2_dummy = np.random.rand(num_rows, 9)
-        NDVI_dummy = np.random.rand(num_rows)
-        MPerd_dummy = np.random.rand(num_rows, 3)
+                        fig = go.Figure()
+                        n_months = XLDA.shape[1]
+                        for m in range(n_months):
+                            month_data = XLDA[:, m]
+                            kde = gaussian_kde(month_data)
+                            x_range = np.linspace(month_data.min(), month_data.max(), 200)
+                            density = kde(x_range)
+                            fig.add_trace(go.Scatter(
+                                x=x_range,
+                                y=density,
+                                mode='lines',
+                                fill='tozeroy',
+                                name=f'Month {m+1}',
+                                hovertemplate="Month: %{text}<br>Loss: %{x:.2f}<br>Density: %{y:.2f}",
+                                text=[f"Month {m+1}"] * len(x_range)
+                            ))
 
-        dfm = pd.DataFrame(np.column_stack((VC_dummy, XInf2_dummy[:, 0:5], NDVI_dummy, XInf2_dummy[:, 5], XInf2_dummy[:, 6:9], MPerd_dummy)))
-        dfm.columns = [
-            'WD', 'Max C', 'Min  C', 'Viento (m/s)', 'Humedad (%)', 'Precip. (mm)',
-            str(indice), 'Skewness', '%C1', '%C2', '%C3', 'Mean (USD)', '75% (USD)', 'OpVar-99.9% (USD)'
-        ]
-        dfm['Max C'] = dfm['Max C'].astype(float).map('{:.3f}'.format)
-        dfm['Min  C'] = dfm['Min  C'].astype(float).map('{:.3f}'.format)
-        dfm['Viento (m/s)'] = dfm['Viento (m/s)'].astype(float).map('{:.3f}'.format)
-        dfm['Humedad (%)'] = dfm['Humedad (%)'].astype(float).map('{:.3f}'.format)
-        dfm['Precip. (mm)'] = dfm['Precip. (mm)'].astype(float).map('{:.3f}'.format)
-        dfm['Skewness'] = dfm['Skewness'].astype(float).map('{:.4f}'.format)
-        dfm[str(indice)] = dfm[str(indice)].astype(float).map('{:.4f}'.format)
-        dfm['%C1'] = dfm['%C1'].astype(float).map('{:.3f}'.format)
-        dfm['%C2'] = dfm['%C2'].astype(float).map('{:.3f}'.format)
-        dfm['%C3'] = dfm['%C3'].astype(float).map('{:.3f}'.format)
-        dfm['Mean (USD)'] = dfm['Mean (USD)'].astype(float).map('{:.2f}'.format)
-        dfm['75% (USD)'] = dfm['75% (USD)'].astype(float).map('{:.2f}'.format)
-        dfm['OpVar-99.9% (USD)'] = dfm['OpVar-99.9% (USD)'].astype(float).map('{:.2f}'.format)
-
-        st.markdown("### Dummy Risk Data Table")
-        st.dataframe(dfm)
-
-        # --- Run HPC risk simulation (Prospectiva) ---
-        # Import the function from your data_processing module
+                        fig.update_layout(
+                            xaxis_title="Losses (USD/Month-Zone)",
+                            yaxis_title="Density",
+                            showlegend=True
+                        )
+                        st.plotly_chart(fig, use_container_width=True, use_container_height=True)  
 
 
-        
+                else:
+                    st.info("No HPC data loaded. Please click 'Run HPC Pipeline' above to compute real HPC results.")
 
-  
+
+        else:
+            st.info("No IDW data to visualize or file not found. Upload or process .zip for NDVI data if needed.")
+
+        # -------------------------------------------------------------------------
+        # 3) HPC Risk Distributions & Table from Real HPC Data
+        # -------------------------------------------------------------------------
+        st.markdown("---")
+
+        # If HPC data is in session, let user select which point to visualize
+        if "hpc_data" in st.session_state:
+            hpc_data = st.session_state["hpc_data"]
+            results = hpc_data.get("results", [])
+            if not results:
+                st.warning("HPC pipeline returned no points. Possibly QGIS file had no data.")
+            else:
+                ##print r keys using results[0].keys() and f print
+                print(f"**********///////////*******Keys in results: {results[0].keys()}")
+
+
+                XLDA = HPC_info["XLDA"]   # shape [1000 x 12]
+                VC = HPC_info["VC"]       # list of length 12
+                XInf2 = HPC_info["XInf"]  # shape [12 x 12]
+
+                
+                # ---- Build HPC Table from XInf2
+                # XInf2 columns: 
+                #   0..4 => climate
+                #   5 => skew
+                #   6 => %C1
+                #   7 => %C2
+                #   8 => %C3
+                #   9 => mean
+                #   10 => 75%
+                #   11 => 99%
+                # "VC" => risk category labels for each month
+                columns = [
+                    "WD","Max C","Min  C","Viento (m/s)","Humedad (%)","Precip. (mm)",
+                    f"{indice}","Skewness","%C1","%C2","%C3","Mean (units)",
+                    "75% (units)","OpVar-99% (units)"
+                ]
+                table_data = []
+                for row_i in range(n_months):
+                    wd       = VC[row_i] if row_i < len(VC) else ""
+                    maxC     = XInf2[row_i, 0]
+                    minC     = XInf2[row_i, 1]
+                    viento   = XInf2[row_i, 2]
+                    hum      = XInf2[row_i, 3]
+                    prec     = XInf2[row_i, 4]
+                    ndvi_val = XInf2[row_i, 8]   # or 9, depending on your usage
+                    skewv    = XInf2[row_i, 5]
+                    pc1      = XInf2[row_i, 6]
+                    pc2      = XInf2[row_i, 7]
+                    pc3      = XInf2[row_i, 8]
+                    mean_val = XInf2[row_i, 9]
+                    p75_val  = XInf2[row_i, 10]
+                    opv99    = XInf2[row_i, 11]
+
+                    rowdata = [
+                        wd, maxC, minC, viento, hum, prec,
+                        ndvi_val, skewv, pc1, pc2, pc3,
+                        mean_val, p75_val, opv99
+                    ]
+                    table_data.append(rowdata)
+
+                df_hpc = pd.DataFrame(table_data, columns=columns)
+                # Format numeric columns
+                for col_ in df_hpc.columns.drop("WD"):
+                    df_hpc[col_] = df_hpc[col_].astype(float).map("{:.3f}".format)
+
+                st.markdown("### HPC Risk Data Table")
+                st.dataframe(df_hpc)
+
+        else:
+            st.info("No HPC data loaded. Please click 'Run HPC Pipeline' above to compute real HPC results.")
