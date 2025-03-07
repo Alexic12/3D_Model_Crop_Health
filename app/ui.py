@@ -439,9 +439,9 @@ def render_ui():
                 sheet_list,
                 key="processed_sheet_selector"
             )
-            hpc_data = st.session_state["hpc_data"]
+            
             if "hpc_data" in st.session_state:
-                
+                hpc_data = st.session_state["hpc_data"]
                 results = hpc_data.get("results", [])
                 point_labels = [f" (Point={r['point_idx']})" for r in results]
                 chosen_point = st.selectbox("Select HPC point result", point_labels)
@@ -492,7 +492,7 @@ def render_ui():
                         y_vals.append(latv)
                         z_vals.append(ndvi_mat[i, j])
 
-                st.markdown("##Monthly Risk Evolution")
+                st.markdown("## Monthly Risk Evolution")
 
                 # If HPC data is in session, let user select which point to visualize
                 if "hpc_data" in st.session_state:
@@ -504,7 +504,7 @@ def render_ui():
                         ##print r keys using results[0].keys() and f print
                         print(f"**********///////////*******Keys in results: {results[0].keys()}")
 
-                        
+
 
                         XLDA = HPC_info["XLDA"]   # shape [1000 x 12]
                         VC = HPC_info["VC"]       # list of length 12
@@ -514,6 +514,8 @@ def render_ui():
 
                         fig = go.Figure()
                         n_months = XLDA.shape[1]
+                        print(f"**********///////////*******n_months: {n_months}")
+                        print(f"**********///////////*******XLDA: {XLDA}")
                         for m in range(n_months):
                             month_data = XLDA[:, m]
                             kde = gaussian_kde(month_data)
@@ -553,6 +555,7 @@ def render_ui():
         if "hpc_data" in st.session_state:
             hpc_data = st.session_state["hpc_data"]
             results = hpc_data.get("results", [])
+
             if not results:
                 st.warning("HPC pipeline returned no points. Possibly QGIS file had no data.")
             else:
