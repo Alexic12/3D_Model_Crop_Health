@@ -1,26 +1,30 @@
-# For more information, please refer to https://aka.ms/vscode-docker-python
+# Use a full Python image to ensure compatibility
 FROM python:3.10
 
-# Keeps Python from generating .pyc files in the container
-ENV PYTHONDONTWRITEBYTECODE=1
-
-# Turns off buffering for easier container logging
-ENV PYTHONUNBUFFERED=1
-
-# Install pip requirements
-COPY requirements.txt .
-RUN python -m pip install -r requirements.txt
-
+# Set the working directory inside the container
 WORKDIR /app
-COPY . /app
 
-# Creates a non-root user with an explicit UID and adds permission to access the /app folder
-# For more info, please refer to https://aka.ms/vscode-docker-python-configure-containers
-RUN adduser -u 5678 --disabled-password --gecos "" appuser && chown -R appuser /app
-USER appuser
+# Install system dependencies needed for rasterio and geospatial processing
+RUN apt-get update && apt-get install -y \
+    libexpat1 \
+    gdal-bin \
+    libgdal-dev \
+    libspatialindex-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-# Expose the port your app runs on
+# Copy the application files
+COPY run_app.py .
+COPY app/ app/
+COPY assets/ assets/
+COPY upload_data/ upload_data/
+COPY .env .
+
+# Copy requirements and install Python dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Expose port 8085
 EXPOSE 8501
 
-# During debugging, this entry point will be overridden. For more information, please refer to https://aka.ms/vscode-docker-python-debug
+# Run the application
 CMD ["python", "run_app.py"]

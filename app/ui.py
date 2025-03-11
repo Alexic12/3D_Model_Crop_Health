@@ -516,7 +516,7 @@ def render_ui():
                         n_months = XLDA.shape[1]
                         print(f"**********///////////*******n_months: {n_months}")
                         print(f"**********///////////*******XLDA: {XLDA}")
-                        for m in range(n_months):
+                        for m in range(1, n_months):
                             month_data = XLDA[:, m]
                             kde = gaussian_kde(month_data)
                             x_range = np.linspace(month_data.min(), month_data.max(), 200)
