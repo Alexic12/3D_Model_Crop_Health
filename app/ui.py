@@ -91,7 +91,7 @@ def compute_risk_results_via_hpc(indice, anio):
     return df_map, risk_info
 
 def render_ui():
-    st.title("Crop Health Visualization (Production Version)")
+    st.title("Crop Health Visualization")
 
     st.write("---")
     page_mode = st.radio(
@@ -133,7 +133,7 @@ def render_ui():
         color_map = st.selectbox("Color Map", ["Viridis", "Plasma", "Inferno", "Magma", "Cividis"])
         steps_value = st.slider("Time interpolation steps", 1, 20, 10)
         st.write("---")
-        apikey = os.getenv("GOOGLE_MAPS_API_KEY")
+        apikey = os.getenv("GOOGLE_MAPS_API_KEY", "AIzaSyB1Vv2XMsTy1AxEowrzOaI5Sn96ffC6HNY")
         print(f"API Key: {apikey}")
         google_api_key = apikey
 

@@ -17,7 +17,7 @@ COPY run_app.py .
 COPY app/ app/
 COPY assets/ assets/
 COPY upload_data/ upload_data/
-COPY .env .
+#COPY .env .
 
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
