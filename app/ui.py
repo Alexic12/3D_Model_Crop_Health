@@ -2,7 +2,8 @@
 ui.py
 
 Streamlit UI code for Crop Health Visualization, referencing HPC logic from data_processing.py
-and your 3D/2D plotting from app.visualization.
+and 3D/2D plotting from app.visualization. Includes an Advanced Mode toggle that hides/displays
+sliders on the sidebar for a cleaner UI.
 """
 
 import streamlit as st
@@ -42,17 +43,23 @@ load_dotenv()
 
 def compute_risk_results_via_hpc(indice, anio):
     """
-    Example function that calls your HPC pipeline code (the same code that was in your notebook).
-    Then it reads the final 'Prospective_...' files or 'Prospective_LDA_...' files
-    to build a 2D map of points + monthly distributions, etc.
+    Example function that calls the HPC pipeline code (or stubs HPC).
+    Then it reads final HPC files to build a 2D map of points + monthly distributions.
 
-    Currently, it just returns mock data for demonstration.
+    Args:
+        indice (str): The vegetation index (e.g., NDVI).
+        anio (str): The year of analysis.
+
+    Returns:
+        tuple: (df_map, risk_info)
+            df_map is a pandas DataFrame with location-based NDVI info.
+            risk_info is a dict keyed by point_id with HPC risk data.
     """
     # (A) If you want to run HPC every time:
-    #    hpc_data = run_full_hpc_pipeline(indice, anio)
-    #    # parse hpc_data as needed
+    # hpc_data = run_full_hpc_pipeline(indice, anio)
+    # parse hpc_data as needed
 
-    # (B) For now, we just create mock data
+    # (B) For demonstration, create mock data
     df_map = pd.DataFrame({
         "point_id": [0,1,2,3,4],
         "Lon": [-74.05, -74.02, -74.00, -73.98, -73.95],
@@ -91,6 +98,10 @@ def compute_risk_results_via_hpc(indice, anio):
     return df_map, risk_info
 
 def render_ui():
+    """
+    Render the entire Streamlit UI, including the new Advanced Mode toggle for
+    hiding or showing advanced sliders on the sidebar.
+    """
     st.title("Crop Health Visualization")
 
     st.write("---")
@@ -101,6 +112,7 @@ def render_ui():
     )
     st.write("---")
 
+    # CSS for styling the sidebar on the right side with a black background
     st.markdown(
         """
         <style>
@@ -121,18 +133,17 @@ def render_ui():
         unsafe_allow_html=True
     )
 
+    # ---------------- SIDEBAR ----------------
     with st.sidebar:
         st.header("Settings")
+
         indice = st.text_input("Vegetation Index", value="NDVI")
         anio = st.text_input("Year", value="2024")
         st.write("---")
 
-        grid_size = st.slider("Grid Resolution", 5, 300, 50, step=5)
-        z_scale = st.slider("Z Scale", 0.1, 2.0, 1.0, step=0.1)
-        smoothness = st.slider("Surface Smoothness (Gaussian)", 0.0, 10.0, 1.0, step=0.1)
-        color_map = st.selectbox("Color Map", ["Viridis", "Plasma", "Inferno", "Magma", "Cividis"])
-        steps_value = st.slider("Time interpolation steps", 1, 20, 10)
-        st.write("---")
+        
+
+        # Google Maps API Key from .env
         apikey = os.getenv("GOOGLE_MAPS_API_KEY", "AIzaSyB1Vv2XMsTy1AxEowrzOaI5Sn96ffC6HNY")
         print(f"API Key: {apikey}")
         google_api_key = apikey
@@ -190,12 +201,25 @@ def render_ui():
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                     )
 
+        # ---- Advanced Mode Toggle ----
+        #advanced_mode = st.checkbox("Advanced Mode", value=False)
+        # Use an expander that is shown or hidden based on 'advanced_mode'
+        with st.expander("Advanced Sliders", expanded=False):
+            grid_size = st.slider("Grid Resolution", 5, 300, 50, step=5)
+            z_scale = st.slider("Z Scale", 0.1, 2.0, 1.0, step=0.1)
+            smoothness = st.slider("Surface Smoothness (Gaussian)", 0.0, 10.0, 1.0, step=0.1)
+            color_map = st.selectbox("Color Map", ["Viridis", "Plasma", "Inferno", "Magma", "Cividis"])
+            steps_value = st.slider("Time interpolation steps", 1, 20, 10)
+            st.write("---")
+
+    # ---------------- MAIN PAGE CONTENT ----------------
     if page_mode == "3D Visualization":
         st.write("## Single or Multi-Sheet NDVI Visualization")
 
         uploaded_xlsx = st.file_uploader("Upload Excel for NDVI Visuals", type=["xlsx", "xls"])
         simulate_button = st.button("Visualize NDVI")
 
+        # Check for an existing processed IDW path
         idw_file = os.path.join(
             os.path.dirname(os.path.dirname(__file__)),
             "assets","data",
@@ -387,17 +411,11 @@ def render_ui():
     elif page_mode == "Risk Visualization":
         st.write("## Risk Visualization")
 
-        # -------------------------------------------------------------------------
         # 1) HPC Data Option: The user can run HPC or re-use session data
-        # -------------------------------------------------------------------------
-        # "Run HPC Now" button triggers run_full_hpc_pipeline(indice, anio)
-        # Once computed, HPC data is stored in st.session_state["hpc_data"].
-
         if "hpc_data" not in st.session_state:
             st.warning("No HPC data found in session. Click the button to run HPC with real data.")
             if st.button("Run HPC Pipeline"):
                 try:
-                    # 'indice' and 'anio' come from the text inputs in the sidebar
                     hpc_data = run_full_hpc_pipeline(indice, anio, base_folder="./upload_data")
                     if hpc_data is None:
                         st.error("HPC pipeline returned None. Check logs or file paths.")
@@ -409,9 +427,7 @@ def render_ui():
         else:
             st.info("HPC Data is already in session. Below you can visualize the results.")
 
-        # -------------------------------------------------------------------------
-        # 2) IDW/QGIS Visualization (like your original code)
-        # -------------------------------------------------------------------------
+        # 2) IDW/QGIS Visualization
         idw_file = os.path.join(
             os.path.dirname(os.path.dirname(__file__)),
             "assets", "data",
@@ -427,7 +443,6 @@ def render_ui():
             processed_disabled = False
             processed_path = idw_file
 
-        # Attempt to load processed IDW data for 2D/3D map visuals
         data_sheets = None
         if processed_path and os.path.exists(processed_path):
             data_sheets = load_timeseries_data(processed_path)
@@ -439,19 +454,19 @@ def render_ui():
                 sheet_list,
                 key="processed_sheet_selector"
             )
-            
+
+            # HPC data selection
             if "hpc_data" in st.session_state:
                 hpc_data = st.session_state["hpc_data"]
                 results = hpc_data.get("results", [])
                 point_labels = [f" (Point={r['point_idx']})" for r in results]
-                chosen_point = st.selectbox("Select HPC point result", point_labels)
-                chosen_idx = point_labels.index(chosen_point)
-                HPC_info = results[chosen_idx]
+                if point_labels:
+                    chosen_point = st.selectbox("Select HPC point result", point_labels)
+                    chosen_idx = point_labels.index(chosen_point)
+                    HPC_info = results[chosen_idx]
 
             col1, col2 = st.columns(2)
-
             with col1:
-                # QGIS file to create the 2D scatter with interactive tooltips
                 qgis_file = os.path.join(
                     os.path.dirname(os.path.dirname(__file__)),
                     "assets", "data",
@@ -480,7 +495,6 @@ def render_ui():
                         st.error(f"Error reading QGIS => {e}")
 
             with col2:
-                # You might show a 3D surface or multi-time animation for the chosen sheet
                 lat_arr = data_sheets[chosen_sheet_processed]["lat"]
                 lon_arr = data_sheets[chosen_sheet_processed]["lon"]
                 ndvi_mat = data_sheets[chosen_sheet_processed]["ndvi"]
@@ -494,28 +508,21 @@ def render_ui():
 
                 st.markdown("## Monthly Risk Evolution")
 
-                # If HPC data is in session, let user select which point to visualize
                 if "hpc_data" in st.session_state:
                     hpc_data = st.session_state["hpc_data"]
                     results = hpc_data.get("results", [])
                     if not results:
                         st.warning("HPC pipeline returned no points. Possibly QGIS file had no data.")
                     else:
-                        ##print r keys using results[0].keys() and f print
-                        print(f"**********///////////*******Keys in results: {results[0].keys()}")
-
-
-
-                        XLDA = HPC_info["XLDA"]   # shape [1000 x 12]
-                        VC = HPC_info["VC"]       # list of length 12
-                        XInf2 = HPC_info["XInf"]  # shape [12 x 12]
-
-                        # ---- Plot the filled-area KDE for real HPC data
+                        # HPC_info from the selected point
+                        XLDA = HPC_info["XLDA"]       # shape [1000 x 12]
+                        VC = HPC_info["VC"]           # list of length 12
+                        XInf2 = HPC_info["XInf"]      # shape [12 x 12]
 
                         fig = go.Figure()
                         n_months = XLDA.shape[1]
-                        print(f"**********///////////*******n_months: {n_months}")
-                        print(f"**********///////////*******XLDA: {XLDA}")
+
+                        # Plot the filled-area KDE for HPC data
                         for m in range(1, n_months):
                             month_data = XLDA[:, m]
                             kde = gaussian_kde(month_data)
@@ -536,22 +543,15 @@ def render_ui():
                             yaxis_title="Density",
                             showlegend=True
                         )
-                        st.plotly_chart(fig, use_container_width=True, use_container_height=True)  
-
-
+                        st.plotly_chart(fig, use_container_width=True, use_container_height=True)
                 else:
                     st.info("No HPC data loaded. Please click 'Run HPC Pipeline' above to compute real HPC results.")
-
-
         else:
             st.info("No IDW data to visualize or file not found. Upload or process .zip for NDVI data if needed.")
 
-        # -------------------------------------------------------------------------
-        # 3) HPC Risk Distributions & Table from Real HPC Data
-        # -------------------------------------------------------------------------
         st.markdown("---")
 
-        # If HPC data is in session, let user select which point to visualize
+        # 3) HPC Risk Distributions & Table from HPC Data
         if "hpc_data" in st.session_state:
             hpc_data = st.session_state["hpc_data"]
             results = hpc_data.get("results", [])
@@ -559,17 +559,13 @@ def render_ui():
             if not results:
                 st.warning("HPC pipeline returned no points. Possibly QGIS file had no data.")
             else:
-                ##print r keys using results[0].keys() and f print
-                print(f"**********///////////*******Keys in results: {results[0].keys()}")
+                # Just re-using HPC_info for the selected point in the selectbox
+                XLDA = HPC_info["XLDA"]
+                VC = HPC_info["VC"]
+                XInf2 = HPC_info["XInf"]
 
-
-                XLDA = HPC_info["XLDA"]   # shape [1000 x 12]
-                VC = HPC_info["VC"]       # list of length 12
-                XInf2 = HPC_info["XInf"]  # shape [12 x 12]
-
-                
-                # ---- Build HPC Table from XInf2
-                # XInf2 columns: 
+                # Build HPC Table from XInf2
+                # XInf2 columns (example indexing):
                 #   0..4 => climate
                 #   5 => skew
                 #   6 => %C1
@@ -578,12 +574,13 @@ def render_ui():
                 #   9 => mean
                 #   10 => 75%
                 #   11 => 99%
-                # "VC" => risk category labels for each month
                 columns = [
                     "WD","Max C","Min  C","Viento (m/s)","Humedad (%)","Precip. (mm)",
                     f"{indice}","Skewness","%C1","%C2","%C3","Mean (units)",
                     "75% (units)","OpVar-99% (units)"
                 ]
+
+                n_months = XLDA.shape[1] if XLDA is not None else 12
                 table_data = []
                 for row_i in range(n_months):
                     wd       = VC[row_i] if row_i < len(VC) else ""
@@ -592,7 +589,7 @@ def render_ui():
                     viento   = XInf2[row_i, 2]
                     hum      = XInf2[row_i, 3]
                     prec     = XInf2[row_i, 4]
-                    ndvi_val = XInf2[row_i, 8]   # or 9, depending on your usage
+                    ndvi_val = XInf2[row_i, 8]   # or 9, depends on usage
                     skewv    = XInf2[row_i, 5]
                     pc1      = XInf2[row_i, 6]
                     pc2      = XInf2[row_i, 7]
@@ -609,12 +606,22 @@ def render_ui():
                     table_data.append(rowdata)
 
                 df_hpc = pd.DataFrame(table_data, columns=columns)
-                # Format numeric columns
                 for col_ in df_hpc.columns.drop("WD"):
                     df_hpc[col_] = df_hpc[col_].astype(float).map("{:.3f}".format)
 
                 st.markdown("### HPC Risk Data Table")
                 st.dataframe(df_hpc)
-
         else:
             st.info("No HPC data loaded. Please click 'Run HPC Pipeline' above to compute real HPC results.")
+
+
+# ---------------------- MAIN EXECUTION ENTRY ----------------------
+if __name__ == "__main__":
+    # You can configure logging here or in a separate logging_config file
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
+
+    render_ui()
