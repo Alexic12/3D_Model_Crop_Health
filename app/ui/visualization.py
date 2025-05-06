@@ -17,6 +17,8 @@ import math
 import mpld3
 from mpld3 import plugins
 from scipy.interpolate import griddata
+import plotly.express as px
+
 
 
 
@@ -200,6 +202,80 @@ def create_2d_scatter_plot_ndvi(
     except Exception as e:
         st.error(f"Error creating 2D scatter plot: {e}")
         return None
+    
+# -------------------------------------------------------------------
+# PLOTLY MOBILE‑FRIENDLY 2‑D NDVI + RISK HEAT‑MAP
+# -------------------------------------------------------------------
+import plotly.express as px
+import numpy as np
+import pandas as pd
+
+def create_2d_scatter_plot_ndvi_plotly(
+    qgis_df: pd.DataFrame,
+    sheet_name: str = "NDVI Sheet",
+    margin_frac: float = 0.05,
+):
+    """
+    Return a Plotly Figure showing an NDVI heat‑map (semi‑transparent)
+    with interactive scatter points. Mobile‑friendly: pinch‑zoom works.
+    """
+    required = {"long-xm", "long-ym", "NDVI", "Riesgo"}
+    if not required.issubset(qgis_df.columns):
+        raise ValueError(f"QGIS DF missing required columns: {required - set(qgis_df.columns)}")
+
+    x = qgis_df["long-xm"]
+    y = qgis_df["long-ym"]
+    ndvi = qgis_df["NDVI"]
+    riesgo = qgis_df["Riesgo"]
+
+    # ------------------------------------------------------------------
+    # Heat‑map layer (2‑D kernel density)
+    # ------------------------------------------------------------------
+    heat = px.density_heatmap(
+        x=x, y=y, z=ndvi,
+        nbinsx=300, nbinsy=300,
+        color_continuous_scale="Viridis",
+    )
+    # set semi‑transparent after creation
+    heat.data[0].update(opacity=0.35)
+
+    # ------------------------------------------------------------------
+    # Scatter points on top
+    # ------------------------------------------------------------------
+    sc = px.scatter(
+        x=x, y=y, color=ndvi,
+        color_continuous_scale="Viridis",
+        hover_data=dict(
+            NDVI=ndvi.round(4),
+            Riesgo=riesgo,
+            Lat=y.round(4),
+            Lon=x.round(4),
+        ),
+        opacity=0.7,
+    )
+
+    # ------------------------------------------------------------------
+    # Combine layers
+    # ------------------------------------------------------------------
+    fig = heat
+    for tr in sc.data:
+        fig.add_trace(tr)
+
+    # ------------------------------------------------------------------
+    # Aesthetics
+    # ------------------------------------------------------------------
+    fig.update_layout(
+        title=f"Interactive NDVI – {sheet_name}",
+        paper_bgcolor="#0b0c2a",
+        plot_bgcolor="#0b0c2a",
+        font=dict(color="white"),
+        margin=dict(l=10, r=10, t=40, b=10),
+    )
+    fig.update_coloraxes(showscale=False)
+    fig.update_xaxes(title="Longitude", showgrid=False)
+    fig.update_yaxes(title="Latitude", showgrid=False, scaleanchor="x")
+
+    return fig
 
 def create_2d_scatter_plot_ndvi_interactive_qgis(
     qgis_df: pd.DataFrame,
