@@ -18,6 +18,7 @@ import mpld3
 from mpld3 import plugins
 from scipy.interpolate import griddata
 import plotly.express as px
+from typing import Tuple, Dict
 
 
 
@@ -206,76 +207,121 @@ def create_2d_scatter_plot_ndvi(
 # -------------------------------------------------------------------
 # PLOTLY MOBILE‑FRIENDLY 2‑D NDVI + RISK HEAT‑MAP
 # -------------------------------------------------------------------
-import plotly.express as px
-import numpy as np
-import pandas as pd
+import streamlit as st
+import logging
+def _log(msg: str):
+    """Write to Streamlit + logger simultaneously."""
+    st.text(msg)
+    logger.info(msg)
+
+
 
 def create_2d_scatter_plot_ndvi_plotly(
     qgis_df: pd.DataFrame,
     sheet_name: str = "NDVI Sheet",
     margin_frac: float = 0.05,
-):
-    """
-    Return a Plotly Figure showing an NDVI heat‑map (semi‑transparent)
-    with interactive scatter points. Mobile‑friendly: pinch‑zoom works.
-    """
+    compact_mode: bool = True,
+    debug: bool = False,               # set True to print debug info in Streamlit + logs
+) -> Tuple[go.Figure, pd.DataFrame]:
     required = {"long-xm", "long-ym", "NDVI", "Riesgo"}
-    if not required.issubset(qgis_df.columns):
-        raise ValueError(f"QGIS DF missing required columns: {required - set(qgis_df.columns)}")
+    missing = required - set(qgis_df.columns)
+    if missing:
+        raise ValueError(f"QGIS DF missing required columns: {missing}")
 
-    x = qgis_df["long-xm"]
-    y = qgis_df["long-ym"]
-    ndvi = qgis_df["NDVI"]
+    # ── Debug: raw dtypes ─────────────────────────────────────────────
+    if debug:
+        _log("🧩 RAW DTYPES")
+        _log(qgis_df[list(required)].dtypes.to_string())
+
+    # ── Coerce to numeric ────────────────────────────────────────────
+    x      = pd.to_numeric(qgis_df["long-xm"], errors="coerce")
+    y      = pd.to_numeric(qgis_df["long-ym"], errors="coerce")
+    ndvi   = pd.to_numeric(qgis_df["NDVI"],    errors="coerce")
     riesgo = qgis_df["Riesgo"]
 
-    # ------------------------------------------------------------------
-    # Heat‑map layer (2‑D kernel density)
-    # ------------------------------------------------------------------
-    heat = px.density_heatmap(
-        x=x, y=y, z=ndvi,
-        nbinsx=300, nbinsy=300,
-        color_continuous_scale="Viridis",
-    )
-    # set semi‑transparent after creation
-    heat.data[0].update(opacity=0.35)
+    if debug:
+        sample = pd.DataFrame({"x": x, "y": y, "ndvi": ndvi}).head()
+        _log("\n🧩 SAMPLE AFTER COERCION")
+        _log(sample.to_string(index=False))
 
-    # ------------------------------------------------------------------
-    # Scatter points on top
-    # ------------------------------------------------------------------
-    sc = px.scatter(
-        x=x, y=y, color=ndvi,
-        color_continuous_scale="Viridis",
-        hover_data=dict(
-            NDVI=ndvi.round(4),
-            Riesgo=riesgo,
-            Lat=y.round(4),
-            Lon=x.round(4),
+    valid = x.notna() & y.notna() & ndvi.notna()
+    if debug:
+        _log(f"\n🧩 VALID ROWS: {valid.sum()} / {len(qgis_df)}")
+
+    x, y, ndvi, riesgo = x[valid], y[valid], ndvi[valid], riesgo[valid]
+    if x.empty:
+        st.error("❌ No valid coordinate rows to plot.")
+        return go.Figure(), pd.DataFrame()
+
+    # ── Layout knobs ─────────────────────────────────────────────────
+    font_size   = 12 if compact_mode else 18
+    marker_size = 10 if compact_mode else 18
+    margin_vals = dict(l=5, r=5, t=40, b=5) if compact_mode else dict(l=10, r=10, t=50, b=10)
+    height      = 450 if compact_mode else None
+
+    # ── Safe-padding so zero spans don’t collapse ───────────────────
+    lon_span = x.max() - x.min()
+    lat_span = y.max() - y.min()
+    if lon_span == 0: lon_span = 2e-5    # ~= 2 m at equator
+    if lat_span == 0: lat_span = 2e-5
+    lon_pad = margin_frac * lon_span
+    lat_pad = margin_frac * lat_span
+
+    # ── Build SVG scatter trace ─────────────────────────────────────
+    scatter = go.Scatter(
+        x=x, y=y,
+        mode="markers",
+        marker=dict(
+            size=marker_size,
+            color=ndvi,
+            colorscale="Viridis",
+            cmin=-1, cmax=1,
+            colorbar=dict(title="NDVI"),
+            line=dict(width=2, color="white"),
+            opacity=0.9,
         ),
-        opacity=0.7,
+        customdata=np.stack([ndvi, riesgo, y, x], axis=-1),
+        hovertemplate="NDVI: %{customdata[0]:.2f}<br>Riesgo: %{customdata[1]}<extra></extra>",
+        showlegend=False,
     )
 
-    # ------------------------------------------------------------------
-    # Combine layers
-    # ------------------------------------------------------------------
-    fig = heat
-    for tr in sc.data:
-        fig.add_trace(tr)
-
-    # ------------------------------------------------------------------
-    # Aesthetics
-    # ------------------------------------------------------------------
+    fig = go.Figure(scatter)
     fig.update_layout(
-        title=f"Interactive NDVI – {sheet_name}",
-        paper_bgcolor="#0b0c2a",
-        plot_bgcolor="#0b0c2a",
-        font=dict(color="white"),
-        margin=dict(l=10, r=10, t=40, b=10),
+        title=dict(text=f"Interactive NDVI – {sheet_name}", font=dict(size=font_size+4, color="white")),
+        paper_bgcolor="black",
+        plot_bgcolor="black",
+        font=dict(color="white", size=font_size),
+        margin=margin_vals,
+        height=height,
+        dragmode="pan",
+        clickmode="event+select",
+        xaxis=dict(
+            title="Longitude",
+            range=[x.min() - lon_pad, x.max() + lon_pad],
+            fixedrange=True,
+            showgrid=False,
+            zeroline=False,
+        ),
+        yaxis=dict(
+            title="Latitude",
+            range=[y.min() - lat_pad, y.max() + lat_pad],
+            fixedrange=True,
+            scaleanchor="x",
+            showgrid=False,
+            zeroline=False,
+        ),
     )
-    fig.update_coloraxes(showscale=False)
-    fig.update_xaxes(title="Longitude", showgrid=False)
-    fig.update_yaxes(title="Latitude", showgrid=False, scaleanchor="x")
 
-    return fig
+    table_data = pd.DataFrame({
+        "NDVI": ndvi.round(4),
+        "Riesgo": riesgo,
+        "Latitud": y.round(4),
+        "Longitud": x.round(4),
+        "Orden": np.arange(1, len(x) + 1),
+    })
+
+    return fig, table_data
+
 
 def create_2d_scatter_plot_ndvi_interactive_qgis(
     qgis_df: pd.DataFrame,
