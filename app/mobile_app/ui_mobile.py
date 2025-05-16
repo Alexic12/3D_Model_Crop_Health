@@ -142,7 +142,7 @@ def render_mobile() -> None:
     # --- folium map ------------------------------------------------------
     m = folium.Map(
         location=[df["long-ym"].mean(), df["long-xm"].mean()],
-        zoom_start=14, control_scale=True
+        zoom_start=17, control_scale=True
     )
     cmap = cm.LinearColormap(["blue", "green", "yellow", "red"], vmin=-1, vmax=1, caption="NDVI")
     cmap.add_to(m)
