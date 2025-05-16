@@ -23,6 +23,7 @@ from keras.layers import Dense, Dropout
 from keras.regularizers import l2
 from keras.callbacks import EarlyStopping
 
+
 logger = logging.getLogger(__name__)
 n_components=5
 n_var=5
