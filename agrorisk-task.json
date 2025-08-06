@@ -1,0 +1,28 @@
+{
+  "family": "agrorisk-task",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "executionRoleArn": "arn:aws:iam::147997127433:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "agrorisk",
+      "image": "147997127433.dkr.ecr.us-east-1.amazonaws.com/agrorisk:latest",
+      "essential": true,
+      "portMappings": [
+        { "containerPort": 8000, "protocol": "tcp" },
+        { "containerPort": 8501, "protocol": "tcp" },
+        { "containerPort": 8502, "protocol": "tcp" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/agrorisk",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}

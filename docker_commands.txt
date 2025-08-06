@@ -1,0 +1,57 @@
+# Step 1: Build the Docker image from docker-compose
+docker compose build
+
+# Step 2: Confirm the image is built and get its name
+docker images
+
+# (Assume image name is "3dmodelcrophealth", tag is "latest")
+
+# Step 3: Save the Docker image to a tarball archive
+docker save -o 3dmodelcrophealth.tar 3dmodelcrophealth:latest
+
+# Step 4: Move the image file to your Desktop
+move 3dmodelcrophealth.tar %USERPROFILE%\Desktop\
+
+
+
+#### for fargate commands
+
+# Step 1: Create new task definition JSON file
+cat > streamlit-task.json <<EOF
+{
+  "family": "streamlit-task",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "512",
+  "memory": "1024",
+  "executionRoleArn": "arn:aws:iam::147997127433:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "streamlit-app",
+      "image": "147997127433.dkr.ecr.us-east-1.amazonaws.com/agrorisk:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8501,
+          "protocol": "tcp"
+        }
+      ]
+    }
+  ]
+}
+EOF
+
+# Step 2: Register new task definition
+aws ecs register-task-definition --cli-input-json file://streamlit-task.json
+
+# Step 3: Get the latest revision number (optional but recommended)
+aws ecs describe-task-definition --task-definition streamlit-task --query "taskDefinition.revision"
+
+# Step 4: Update ECS service to use the latest revision and force new deployment
+aws ecs update-service \
+  --cluster streamlit-cluster \
+  --service streamlit-task-service-uu9sz6hc \
+  --task-definition streamlit-task \
+  --force-new-deployment
+
+

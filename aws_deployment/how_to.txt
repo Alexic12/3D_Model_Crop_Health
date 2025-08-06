@@ -1,0 +1,36 @@
+How to use
+Install dependencies:
+
+bash
+Copiar
+Editar
+pip install boto3
+Edit the config block at the top:
+
+Put your AWS keys (or leave them None and rely on aws configure / env vars / SSO).
+
+Confirm names (cluster, service, repo, family).
+
+Adjust ports if you’re not running Streamlit UIs inside the image.
+
+Run:
+
+bash
+Copiar
+Editar
+python deploy_agrorisk.py
+It will print the public IP to open:
+
+http://<PUBLIC_IP>:8000/docs
+
+http://<PUBLIC_IP>:8501
+
+http://<PUBLIC_IP>:8502
+
+Pause costs when idle:
+
+bash
+Copiar
+Editar
+aws ecs update-service --cluster streamlit-cluster --service streamlit-task-service-uu9sz6hc --desired-count 0 --region us-east-1
+(Scale back to 1 when needed.)

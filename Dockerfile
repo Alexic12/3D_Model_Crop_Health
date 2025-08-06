@@ -1,30 +1,27 @@
 # Use a full Python image to ensure compatibility
 FROM python:3.10
 
-# Set the working directory inside the container
 WORKDIR /app
 
-# Install system dependencies needed for rasterio and geospatial processing
+# System deps for rasterio/geospatial
 RUN apt-get update && apt-get install -y \
-    libexpat1 \
     gdal-bin \
     libgdal-dev \
     libspatialindex-dev \
-    && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/*
 
-# Copy the application files
-COPY run_app.py .
-COPY app/ app/
-COPY assets/ assets/
-COPY upload_data/ upload_data/
-#COPY .env .
-
-# Copy requirements and install Python dependencies
+# Install Python deps first (better layer caching)
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Expose port 8085
-EXPOSE 8501
+# Copy your app code
+COPY app/ app/
+COPY assets/ assets/
+COPY upload_data/ upload_data/
+# COPY .env .   # if you need it
 
-# Run the application
-CMD ["python", "run_app.py"]
+# Expose all three ports for Option B
+EXPOSE 8000 8501 8502
+
+# Run the wrapper INSIDE app/ (fixes the path)
+CMD ["python", "-u", "app/run_app_uvicorn.py"]
