@@ -18,6 +18,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app/ app/
 COPY assets/ assets/
 COPY upload_data/ upload_data/
+COPY .streamlit/ .streamlit/
 # COPY .env .   # if you need it
 
 # Expose all three ports for Option B

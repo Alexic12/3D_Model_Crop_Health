@@ -86,15 +86,55 @@ def _save_riesgo_sheet(sheet_name: str, df_sheet: pd.DataFrame) -> None:
         logger.exception("Error saving riesgo sheet")
 # ──────────────────────── MAIN MOBILE APP ───────────────────────
 def render_mobile() -> None:
-    st.set_page_config(page_title="Crop Health – Mobile", layout="wide")
+    st.set_page_config(
+        page_title="Crop Health – Mobile", 
+        page_icon="📱",
+        layout="wide",
+        initial_sidebar_state="collapsed"
+    )
 
-    # --- viewport tweak for small screens --------------------------------
+    # Import mobile optimizations
+    from app.ui.mobile_optimizations import inject_mobile_optimizations, MobileOptimizer, PerformanceOptimizer
+    
+    # Apply mobile optimizations
+    inject_mobile_optimizations()
+    
+    # Mobile-first responsive design
     st.markdown(
         """
-        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
         <style>
-            @media (max-width: 768px){
-                .main .block-container{padding-left:.5rem!important;padding-right:.5rem!important;}
+            /* Mobile-first base styles */
+            .main .block-container {
+                padding: 0.5rem !important;
+                max-width: 100% !important;
+            }
+            
+            /* Touch-friendly map container */
+            .stApp > div > div > div > div {
+                padding: 0 !important;
+            }
+            
+            /* Optimize for small screens */
+            @media (max-width: 480px) {
+                .main .block-container {
+                    padding: 0.25rem !important;
+                }
+                
+                h1 {
+                    font-size: 1.5rem !important;
+                }
+                
+                h2, h3 {
+                    font-size: 1.25rem !important;
+                }
+            }
+            
+            /* Landscape orientation adjustments */
+            @media (orientation: landscape) and (max-height: 500px) {
+                .main .block-container {
+                    padding-top: 0.25rem !important;
+                }
             }
         </style>
         """,

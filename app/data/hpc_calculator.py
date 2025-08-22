@@ -7,7 +7,7 @@ class HCPCalc():
         pass
 
     @staticmethod
-    def compute_risk_results_via_hpc(indice, anio):
+    def compute_risk_results_via_hpc(indice, anio, field_name=None, base_folder="./upload_data"):
         """
         Example function that calls the HPC pipeline code (or stubs HPC).
         Then it reads final HPC files to build a 2D map of points + monthly distributions.
@@ -15,14 +15,28 @@ class HCPCalc():
         Args:
             indice (str): The vegetation index (e.g., NDVI).
             anio (str): The year of analysis.
+            field_name (str): The field name for folder structure.
+            base_folder (str): Base folder path.
 
         Returns:
             tuple: (df_map, risk_info)
                 df_map is a pandas DataFrame with location-based NDVI info.
                 risk_info is a dict keyed by point_id with HPC risk data.
         """
+        # Use field-based folder structure if field_name provided
+        if field_name:
+            # Try to read from field-specific paths
+            qgis_path = os.path.join("assets", "data", field_name, f"INFORME_{indice}_QGIS_{anio}.xlsx")
+            if not os.path.exists(qgis_path):
+                qgis_path = os.path.join(base_folder, field_name, indice, anio, f"INFORME_{indice}_QGIS_{anio}.xlsx")
+        else:
+            qgis_path = os.path.join("assets", "data", f"INFORME_{indice}_QGIS_{anio}.xlsx")
         # (A) If you want to run HPC every time:
-        # hpc_data = run_full_hpc_pipeline(indice, anio)
+        # if field_name:
+        #     field_base_folder = os.path.join(base_folder, field_name)
+        #     hpc_data = run_full_hpc_pipeline(indice, anio, base_folder=field_base_folder)
+        # else:
+        #     hpc_data = run_full_hpc_pipeline(indice, anio, base_folder=base_folder)
         # parse hpc_data as needed
 
         # (B) For demonstration, create mock data
