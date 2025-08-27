@@ -1,3 +1,0 @@
-pip install -e .
-
-python -m my_geocoding_app.main

@@ -19,10 +19,15 @@ COPY app/ app/
 COPY assets/ assets/
 COPY upload_data/ upload_data/
 COPY .streamlit/ .streamlit/
-# COPY .env .   # if you need it
+
+# Copy .env file if it exists
+COPY .env* ./
 
 # Expose all three ports for Option B
 EXPOSE 8000 8501 8502
+
+# Set environment variables from .env file
+ENV PYTHONPATH=/app
 
 # Run the wrapper INSIDE app/ (fixes the path)
 CMD ["python", "-u", "app/run_app_uvicorn.py"]

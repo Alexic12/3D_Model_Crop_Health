@@ -806,7 +806,7 @@ def create_3d_simulation_plot_time_interpolation(
         xi, yi = np.meshgrid(xi, yi)
 
         ndvi_grids = []
-        global_min = 0.7
+        global_min = 0.3
         global_max = 0.9
 
         for (xv, yv, zv) in flattened:

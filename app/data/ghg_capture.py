@@ -222,26 +222,39 @@ def process_ghg_data(indice, anio, base_folder="./upload_data", field_name=None)
                 elif MI[i, j] == 5:
                     MCG[i, j] = (0.9 + 0.2 * random.random()) * CNG[4]
         
-        # Generate management scenarios
-        NDm = 100
+        # Generate management scenarios with proper sampling (from Jupyter notebook)
+        NDm = 100  # Number of sampling data
         NGL = [1.5, 2, 3, 4]
         MGR = ['Baseline']
         MRm = []
         LDAT = []
         
-        # Baseline calculation
+        # Baseline calculation with fuzzy sampling
         LDAo = ME * MP
+        
+        # Sample frequency and severity data
+        Xfm = pd.DataFrame(Xf).sample(n=NDm, replace=True)
+        Xf2 = np.array(Xfm)
+        Xsm = pd.DataFrame(Xs).sample(n=NDm, replace=True) 
+        Xs2 = np.array(Xsm)
+        
+        # Apply fuzzy logic for baseline
+        LDAo = Fuzzyx(Xf2, sigmaf, Xs2, sigmas, XCf, XCs, ME, MI, MI, MP)
+        
         muo = np.mean(LDAo)
-        OpVaro = np.percentile(LDAo.flatten(), 99.9)
+        OpVaro = np.percentile(LDAo, 99.9)
         PNEo = np.mean(LDAo[(LDAo >= muo) & (LDAo < OpVaro)])
         
-        NEo = int(np.sum(ME))
-        NSo = int(np.sum(ME) * 0.1)  # Simplified
-        NNEo = int(np.sum(ME) * 0.8)  # Simplified
-        VCo = 0
-        L75o = np.percentile(LDAo.flatten(), 75)
+        # Calculate risk events properly
+        NEProm = np.sum((ME * MI)) / np.sum(MI)  # Average losses per event
+        NEo = int(((np.sum(LDAo < muo)) / NDm) * np.sum(ME))
+        NSo = int(((np.sum(LDAo >= OpVaro) / NDm)) * np.sum(ME))
+        NNEo = int(((np.sum((LDAo >= muo) & (LDAo < OpVaro)) / NDm)) * np.sum(ME))
+        VCo = NNEo - NNEo  # Captured value
+        L75o = np.percentile(LDAo, 75)
         CVCo = 0
         
+        # Financial costs and income
         MCT = (MCG * ME) / len(hojas.items())
         CTA = np.sum(MCT)
         XIng = (np.sum((0.9 + 0.2 * random.random()) * ME * Ingp) / len(hojas.items())) * 12
@@ -249,31 +262,63 @@ def process_ghg_data(indice, anio, base_folder="./upload_data", field_name=None)
         MRm.append([muo, PNEo, L75o, OpVaro, NEo, NNEo, NSo, VCo, CVCo, CTA, XIng])
         LDAT.append(LDAo.flatten())
         
-        # Management scenarios
+        # Convert to array for column stacking
+        LDAT = np.array(LDAT)
+        LDAT = np.array(LDAT.flatten())
+        
+        # Management scenarios with proper fuzzy calculations
         for NG in NGL:
+            # Modify manageable values
             MG = MI.astype(float).copy()
             MG[(MG > 1) & (MG < 5)] *= NG
             
+            # Calculate LDA with management matrix
             LDAm = (ME * MP * MI) / MG
+            
+            # Sample data for this scenario
+            Xfm = pd.DataFrame(Xf).sample(n=NDm, replace=True)
+            Xf2 = np.array(Xfm)
+            Xsm = pd.DataFrame(Xs).sample(n=NDm, replace=True)
+            Xs2 = np.array(Xsm)
+            
+            # Apply fuzzy logic with management matrix
+            LDAm = Fuzzyx(Xf2, sigmaf, Xs2, sigmas, XCf, XCs, ME, MI, MG, MP)
+            
+            # Stack LDA data for visualization
+            LDAT = np.column_stack((LDAT, LDAm.flatten()))
+            
             mu = np.mean(LDAm)
-            OpVar = np.percentile(LDAm.flatten(), 99.9)
+            OpVar = np.percentile(LDAm, 99.9)
             PNE = np.mean(LDAm[(LDAm >= mu) & (LDAm < OpVar)])
             
-            NEm = int(np.sum(ME))
-            NSm = int(np.sum(ME) * 0.1)
-            NNEm = int(np.sum(ME) * 0.8)
-            VCm = NNEo - NNEm
-            L75 = np.percentile(LDAm.flatten(), 75)
-            VC = VCm * 100  # Simplified calculation
+            # Calculate risk events for this scenario
+            NEm = int(((np.sum(LDAm < muo) / NDm)) * np.sum(ME))
+            NSm = int(((np.sum(LDAm >= OpVaro) / NDm)) * np.sum(ME))
+            NNEm = int(((np.sum((LDAm >= muo) & (LDAm < OpVaro)) / NDm)) * np.sum(ME))
+            VCm = NNEo - NNEm  # Units saved
+            
+            # Update baseline values for next iteration
+            muo = mu
+            OpVaro = OpVar
+            
+            # Financial captured value calculation
+            MP_temp = MP.copy()
+            MP_temp[MP_temp == 0] = np.min(MP_temp[MP_temp > 0])
+            CVC = np.mean(LDAm) / NEProm  # Expected loss unit cost
+            CVC = np.sum((ME * MP_temp)) / np.sum(ME)
+            CVCs = np.percentile(LDAm, 99.9)  # Catastrophic loss unit cost
+            CVCs = np.percentile((ME * MP_temp) / ME, 99.9)
+            L75 = np.percentile(LDAm, 75)
+            VC = VCm * ((CVCs - CVC))
             
             MGR.append(f'Level {NG}')
             
+            # Management costs and income
             MCT = (MCG * MG * ME) / (MI * len(hojas.items()))
             CTA = np.sum(MCT)
             XIng = (np.sum((0.9 + 0.2 * random.random()) * ME * Ingp) / len(hojas.items())) * 12
             
             MRm.append([mu, PNE, L75, OpVar, NEm, NNEm, NSm, VCm, VC, CTA, XIng])
-            LDAT.append(LDAm.flatten())
         
         # Create results dataframe
         df_results = pd.DataFrame(MRm)
@@ -296,17 +341,39 @@ def process_ghg_data(indice, anio, base_folder="./upload_data", field_name=None)
         df_clusters.columns = ['0', '1', '2', '3', '4']
         df_clusters.index = ['Labels', 'Frecuencia', 'Diametros', 'Labels', 'Severidad (COP)', 'Diametros (COP)']
         
+        # Store management matrices for visualization
+        management_matrices = {}
+        for i, NG in enumerate([None] + NGL):  # Include baseline (None) + management levels
+            if NG is None:
+                MG_viz = MI.copy()
+                name = 'Baseline'
+            else:
+                MG_viz = MI.astype(float).copy()
+                MG_viz[(MG_viz > 1) & (MG_viz < 5)] *= NG
+                name = f'Level {NG}'
+            
+            management_matrices[name] = MG_viz
+        
         return {
             'clusters': df_clusters,
             'events_matrix': ME,
             'losses_matrix': MP,
             'impact_matrix': MI,
+            'management_matrices': management_matrices,
             'results': df_results,
-            'lda_data': np.array(LDAT).T,
+            'lda_data': LDAT,  # Already properly formatted
             'mgr_labels': MGR,
             'frequency_labels': lbf,
             'severity_labels': lbs,
-            'usd_cop_rate': usd_cop_rate
+            'usd_cop_rate': usd_cop_rate,
+            'raw_data': {
+                'Xf': Xf,
+                'Xs': Xs,
+                'XCf': XCf,
+                'XCs': XCs,
+                'sigmaf': sigmaf,
+                'sigmas': sigmas
+            }
         }
         
     except Exception as e:
@@ -337,18 +404,27 @@ def create_risk_matrix_heatmap(matrix, title, freq_labels, sev_labels):
 
 
 def create_lda_distribution_plot(lda_data, mgr_labels):
-    """Create LDA distribution plot"""
+    """Create LDA distribution plot matching Jupyter notebook style"""
     fig = go.Figure()
     
     colors = ['red', 'orange', 'yellow', 'blue', 'green']
     
-    for i, (data, label, color) in enumerate(zip(lda_data.T, mgr_labels, colors)):
+    # Handle both 1D and 2D LDAT arrays
+    if lda_data.ndim == 1:
+        lda_data = lda_data.reshape(-1, 1)
+    
+    for i in range(min(lda_data.shape[1], len(mgr_labels))):
+        data = lda_data[:, i]
+        label = mgr_labels[i]
+        color = colors[i % len(colors)]
+        
         fig.add_trace(go.Histogram(
             x=data,
             name=label,
             opacity=0.7,
             marker_color=color,
-            histnorm='probability density'
+            histnorm='probability density',
+            nbinsx=50
         ))
     
     fig.update_layout(
@@ -356,6 +432,56 @@ def create_lda_distribution_plot(lda_data, mgr_labels):
         xaxis_title="USD",
         yaxis_title="Density",
         barmode='overlay',
+        height=500,
+        showlegend=True
+    )
+    
+    return fig
+
+def create_management_matrix_heatmap(matrix, title, freq_labels, sev_labels):
+    """Create management matrix heatmap"""
+    fig = go.Figure(data=go.Heatmap(
+        z=matrix[::-1],
+        x=sev_labels.flatten(),
+        y=freq_labels[:, ::-1].flatten(),
+        colorscale='Viridis',
+        showscale=True,
+        text=matrix[::-1],
+        texttemplate="%{text:.1f}",
+        textfont={"size": 10}
+    ))
+    
+    fig.update_layout(
+        title=title,
+        xaxis_title="Severidad",
+        yaxis_title="Frecuencia",
+        height=400
+    )
+    
+    return fig
+
+def create_cost_benefit_chart(results_df):
+    """Create cost-benefit analysis chart"""
+    fig = go.Figure()
+    
+    fig.add_trace(go.Scatter(
+        x=results_df['CG (USD)'],
+        y=results_df['VC (USD)'],
+        mode='markers+text',
+        text=results_df.index,
+        textposition="top center",
+        marker=dict(
+            size=12,
+            color=results_df['Media (USD)'],
+            colorscale='RdYlGn_r',
+            showscale=True
+        )
+    ))
+    
+    fig.update_layout(
+        title="Cost-Benefit Analysis",
+        xaxis_title="Management Cost (USD)",
+        yaxis_title="Value Captured (USD)",
         height=500
     )
     

@@ -118,6 +118,32 @@ def inject_responsive_css():
         outline-offset: 2px;
     }
     
+    /* Fix Selectbox Text Visibility */
+    .stSelectbox label {
+        color: var(--text-color) !important;
+    }
+    
+    .stSelectbox > div > div {
+        color: var(--text-color) !important;
+    }
+    
+    .stSelectbox > div > div > div {
+        color: var(--text-color) !important;
+    }
+    
+    .stSelectbox select {
+        color: var(--text-color) !important;
+    }
+    
+    .stSelectbox option {
+        color: var(--text-color) !important;
+    }
+    
+    /* Force visibility on all selectbox children */
+    .stSelectbox * {
+        color: var(--text-color) !important;
+    }
+    
     /* High Contrast Mode Support */
     @media (prefers-contrast: high) {
         :root {

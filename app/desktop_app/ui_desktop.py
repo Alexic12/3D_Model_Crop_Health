@@ -17,8 +17,10 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
-from dotenv import load_dotenv
 from scipy.stats import gaussian_kde
+
+# Configuration import
+from app.config.config import settings
 
 # HPC imports
 from app.data.data_processing import (
@@ -33,6 +35,8 @@ from app.data.ghg_capture import (
     process_ghg_data,
     create_risk_matrix_heatmap,
     create_lda_distribution_plot,
+    create_management_matrix_heatmap,
+    create_cost_benefit_chart,
 )
 
 # Visualization helpers
@@ -45,9 +49,6 @@ from app.ui.visualization import (
 )
 
 logger = logging.getLogger(__name__)
-
-# Load environment variables from .env file (e.g., for Google Maps API)
-load_dotenv()
 
 
 def _responsive_css() -> None:
@@ -104,6 +105,14 @@ def _responsive_css() -> None:
               background-color: var(--surface-color);
               border-right: 1px solid var(--border-color);
               transition: transform var(--transition-base);
+              overflow-y: auto;
+              overflow-x: hidden;
+          }
+          
+          [data-testid="stSidebar"] > div {
+              overflow-y: auto;
+              overflow-x: hidden;
+              height: 100vh;
           }
           
           /* Force sidebar to right on all screen sizes */
@@ -266,6 +275,58 @@ def _responsive_css() -> None:
                   min-height: 44px;
               }
           }
+
+          /* Fix Dropdown Text Visibility - Comprehensive */
+          .stSelectbox label {
+              color: var(--text-primary) !important;
+          }
+          
+          .stSelectbox > div > div {
+              color: var(--text-primary) !important;
+              background-color: var(--background-color) !important;
+          }
+          
+          .stSelectbox > div > div > div {
+              color: var(--text-primary) !important;
+              background-color: var(--background-color) !important;
+          }
+          
+          .stSelectbox select {
+              color: var(--text-primary) !important;
+              background-color: var(--background-color) !important;
+          }
+          
+          .stSelectbox option {
+              color: var(--text-primary) !important;
+              background-color: var(--background-color) !important;
+          }
+          
+          /* Target all possible selectbox elements */
+          [data-testid="stSelectbox"] {
+              color: var(--text-primary) !important;
+          }
+          
+          [data-testid="stSelectbox"] > div {
+              color: var(--text-primary) !important;
+          }
+          
+          [data-testid="stSelectbox"] div {
+              color: var(--text-primary) !important;
+          }
+          
+          [data-testid="stSelectbox"] span {
+              color: var(--text-primary) !important;
+          }
+          
+          /* Force text color on all child elements */
+          .stSelectbox * {
+              color: var(--text-primary) !important;
+          }
+          
+          /* Ensure dropdown arrow is visible */
+          .stSelectbox > div > div::after {
+              border-color: var(--text-primary) transparent transparent transparent !important;
+          }
         </style>
         """,
         unsafe_allow_html=True,
@@ -352,10 +413,10 @@ def render_ui() -> None:
         anio = st.text_input("Year", value="2024")
         st.write("---")
 
-        # Google Maps API Key from .env (do not print to logs/stdout in prod)
-        google_api_key = os.getenv("GOOGLE_MAPS_API_KEY", "")
+        # Google Maps API Key from configuration
+        google_api_key = settings.GOOGLE_MAPS_API_KEY
         if not google_api_key:
-            st.info("No GOOGLE_MAPS_API_KEY found in .env. Interactive basemap may be limited.")
+            st.info("No GOOGLE_MAPS_API_KEY configured. Interactive basemap may be limited.")
 
         st.subheader("Bulk NDVI ZIP Analysis")
         uploaded_files = st.file_uploader(
@@ -669,7 +730,7 @@ def render_ui() -> None:
                         img_b64 = base64.b64encode(buffer.getvalue()).decode()
                         
                         st.markdown(
-                            f'<div style="max-width: 80%; margin: 0 auto;">'
+                            f'<div style="max-width: 80%; margin: 15% auto 0 auto;">'
                             f'<img src="data:image/png;base64,{img_b64}" '
                             f'style="width: 100%; height: auto; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);" />'
                             f'<p style="text-align: center; margin-top: 8px; color: #666;">NDVI ColorMap - {chosen_sheet_processed}</p>'
@@ -1054,6 +1115,28 @@ def render_ui() -> None:
             st.subheader("Risk Management Scenarios")
             st.dataframe(ghg_data["results"])
             
+            # Management matrices visualization
+            st.subheader("Management Matrices")
+            if "management_matrices" in ghg_data:
+                matrix_cols = st.columns(2)
+                matrix_names = list(ghg_data["management_matrices"].keys())
+                
+                for i, (name, matrix) in enumerate(ghg_data["management_matrices"].items()):
+                    col_idx = i % 2
+                    with matrix_cols[col_idx]:
+                        fig_matrix = create_management_matrix_heatmap(
+                            matrix,
+                            f"Management Matrix - {name}",
+                            ghg_data["frequency_labels"],
+                            ghg_data["severity_labels"]
+                        )
+                        st.plotly_chart(fig_matrix, use_container_width=True)
+            
+            # Cost-benefit analysis
+            st.subheader("Cost-Benefit Analysis")
+            fig_cost_benefit = create_cost_benefit_chart(ghg_data["results"])
+            st.plotly_chart(fig_cost_benefit, use_container_width=True)
+            
             # LDA distribution plot
             st.subheader("Loss Distribution Analysis (LDA)")
             fig_lda = create_lda_distribution_plot(
@@ -1061,6 +1144,28 @@ def render_ui() -> None:
                 ghg_data["mgr_labels"]
             )
             st.plotly_chart(fig_lda, use_container_width=True)
+        
+            # Additional metrics dashboard
+            st.subheader("Risk Metrics Summary")
+            metrics_cols = st.columns(4)
+            
+            with metrics_cols[0]:
+                baseline_loss = ghg_data["results"].loc["Baseline", "Media (USD)"]
+                st.metric("Baseline Loss", f"${baseline_loss:,.0f}")
+            
+            with metrics_cols[1]:
+                best_scenario = ghg_data["results"]["Media (USD)"].idxmin()
+                best_loss = ghg_data["results"].loc[best_scenario, "Media (USD)"]
+                reduction = ((baseline_loss - best_loss) / baseline_loss) * 100
+                st.metric("Best Scenario", best_scenario, f"-{reduction:.1f}%")
+            
+            with metrics_cols[2]:
+                max_vc = ghg_data["results"]["VC (USD)"].max()
+                st.metric("Max Value Captured", f"${max_vc:,.0f}")
+            
+            with metrics_cols[3]:
+                total_events = ghg_data["results"]["NE"].iloc[0]
+                st.metric("Total Risk Events", f"{total_events:,}")
         
         else:
             st.info("Click 'Process GHG Data' to analyze greenhouse gas capture and risk management scenarios.")

@@ -22,6 +22,9 @@ class Settings(BaseSettings):
 
     # ── Misc ───────────────────────────────────────────────────────────
     LOG_LEVEL: str = Field(default="INFO")
+    
+    # ── Google Maps API Key (for AWS Fargate deployment) ──────────────
+    GOOGLE_MAPS_API_KEY: str = Field(default="AIzaSyB1Vv2XMsTy1AxEowrzOaI5Sn96ffC6HNY")
 
     class Config:
         env_prefix = "CHV_"
