@@ -61,6 +61,32 @@ class MobileOptimizer:
         if MobileOptimizer.detect_mobile():
             st.markdown("""
             <style>
+                        
+            /* CSS Custom Properties for Design System */
+            :root {
+                --primary-color: #1f77b4;
+                --secondary-color: #ff7f0e;
+                --success-color: #2ca02c;
+                --warning-color: #ff7f0e;
+                --error-color: #d62728;
+                --background-color: #ffffff;
+                --surface-color: #f8f9fa;
+                --text-primary: #212529;
+                --text-secondary: #6c757d;
+                --border-color: #dee2e6;
+                --border-radius: 8px;
+                --spacing-xs: 0.25rem;
+                --spacing-sm: 0.5rem;
+                --spacing-md: 1rem;
+                --spacing-lg: 1.5rem;
+                --spacing-xl: 2rem;
+                --font-size-sm: 0.875rem;
+                --font-size-base: 1rem;
+                --font-size-lg: 1.125rem;
+                --font-size-xl: 1.25rem;
+                --line-height-base: 1.5;
+                --transition-base: 0.15s ease-in-out;
+            }
             /* Mobile navigation bar */
             .mobile-nav {
                 position: fixed;
@@ -88,6 +114,58 @@ class MobileOptimizer:
                 background: #1f77b4;
                 color: white;
                 border-radius: 8px;
+            }
+                        
+            /* Fix Dropdown Text Visibility - Comprehensive */
+            .stSelectbox label {
+                color: var(--text-primary) !important;
+            }
+            
+            .stSelectbox > div > div {
+                color: var(--text-primary) !important;
+                background-color: var(--background-color) !important;
+            }
+            
+            .stSelectbox > div > div > div {
+                color: var(--text-primary) !important;
+                background-color: var(--background-color) !important;
+            }
+            
+            .stSelectbox select {
+                color: var(--text-primary) !important;
+                background-color: var(--background-color) !important;
+            }
+            
+            .stSelectbox option {
+                color: var(--text-primary) !important;
+                background-color: var(--background-color) !important;
+            }
+            
+            /* Target all possible selectbox elements */
+            [data-testid="stSelectbox"] {
+                color: var(--text-primary) !important;
+            }
+            
+            [data-testid="stSelectbox"] > div {
+                color: var(--text-primary) !important;
+            }
+            
+            [data-testid="stSelectbox"] div {
+                color: var(--text-primary) !important;
+            }
+            
+            [data-testid="stSelectbox"] span {
+                color: var(--text-primary) !important;
+            }
+            
+            /* Force text color on all child elements */
+            .stSelectbox * {
+                color: var(--text-primary) !important;
+            }
+            
+            /* Ensure dropdown arrow is visible */
+            .stSelectbox > div > div::after {
+                border-color: var(--text-primary) transparent transparent transparent !important;
             }
             </style>
             """, unsafe_allow_html=True)

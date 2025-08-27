@@ -127,13 +127,51 @@ def render_mobile() -> None:
     from app.ui.mobile_optimizations import inject_mobile_optimizations, MobileOptimizer, PerformanceOptimizer
     
     # Apply mobile optimizations
-    inject_mobile_optimizations()
+    #inject_mobile_optimizations()
     
     # Mobile-first responsive design
     st.markdown(
         """
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
         <style>
+            /* CSS Custom Properties for Design System */
+            :root {
+                --primary-color: #1f77b4;
+                --secondary-color: #ff7f0e;
+                --success-color: #2ca02c;
+                --warning-color: #ff7f0e;
+                --error-color: #d62728;
+                --background-color: #ffffff;
+                --surface-color: #f8f9fa;
+                --text-primary: #212529;
+                --text-secondary: #6c757d;
+                --border-color: #dee2e6;
+                --border-radius: 8px;
+                --spacing-xs: 0.25rem;
+                --spacing-sm: 0.5rem;
+                --spacing-md: 1rem;
+                --spacing-lg: 1.5rem;
+                --spacing-xl: 2rem;
+                --font-size-sm: 0.875rem;
+                --font-size-base: 1rem;
+                --font-size-lg: 1.125rem;
+                --font-size-xl: 1.25rem;
+                --line-height-base: 1.5;
+                --transition-base: 0.15s ease-in-out;
+            }
+
+            /* Dark Mode Support */
+            @media (prefers-color-scheme: dark) {
+                :root {
+                    --background-color: #121212;
+                    --surface-color: #1e1e1e;
+                    --text-primary: #ffffff;
+                    --text-secondary: #b3b3b3;
+                    --border-color: #333333;
+                }
+            }
+
+            
             /* Mobile-first base styles */
             .main .block-container {
                 padding: 0.5rem !important;
@@ -144,7 +182,37 @@ def render_mobile() -> None:
             .stApp > div > div > div > div {
                 padding: 0 !important;
             }
+
+            .stSelectbox select {
+                color: var(--text-primary) !important;
+                background-color: var(--background-color) !important;
+            }
+
+            /* Fix Dropdown Text Visibility - Comprehensive */
+            .stSelectbox label {
+                color: var(--text-primary) !important;
+            }
+
+            .stSelectbox > div > div {
+                color: var(--text-primary) !important;
+                background-color: var(--background-color) !important;
+            }
             
+            .stSelectbox > div > div > div {
+                color: var(--text-primary) !important;
+                background-color: var(--background-color) !important;
+            }
+            
+            .stSelectbox select {
+                color: var(--text-primary) !important;
+                background-color: var(--background-color) !important;
+            }
+            
+            .stSelectbox option {
+                color: var(--text-primary) !important;
+                background-color: var(--background-color) !important;
+            }
+                
             /* Optimize for small screens */
             @media (max-width: 480px) {
                 .main .block-container {
