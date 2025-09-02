@@ -403,6 +403,7 @@ def create_2d_scatter_plot_ndvi_interactive_qgis(
 
         # 7) RBF interpolation for full heatmap coverage
         from matplotlib import cm
+        from matplotlib.colors import LinearSegmentedColormap
         from scipy.interpolate import Rbf
 
         grid_res = 300
@@ -414,15 +415,19 @@ def create_2d_scatter_plot_ndvi_interactive_qgis(
         grid_ndvi_rbf = rbf_interpolator(grid_x, grid_y)
         masked_grid_ndvi = np.clip(grid_ndvi_rbf, cmin, cmax)
 
-        cmap = cm.get_cmap("viridis")
+        # Custom colormap with dynamic min/max
+        vmin, vmax = float(ndvi_vals.min()), float(ndvi_vals.max())
+        colors = ['red', 'orange', 'yellow', 'green']
+        cmap = LinearSegmentedColormap.from_list('custom_ndvi', colors, N=256)
+        
         ax.imshow(
             masked_grid_ndvi,
             extent=(lon_min_adj, lon_max_adj, lat_min_adj, lat_max_adj),
             origin='lower',
             cmap=cmap,
-            alpha=0.35,
-            vmin=cmin,
-            vmax=cmax,
+            alpha=0.55,
+            vmin=vmin,
+            vmax=vmax,
             zorder=1
         )
 
@@ -433,9 +438,9 @@ def create_2d_scatter_plot_ndvi_interactive_qgis(
             x_plot,
             y_plot,
             c=ndvi_vals,
-            cmap='viridis',
-            vmin=cmin,
-            vmax=cmax,
+            cmap=cmap,
+            vmin=vmin,
+            vmax=vmax,
             alpha=point_alpha,
             s=point_size,
             zorder=2
