@@ -3,6 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.cluster import KMeans
+from scipy.stats import skew
 import os
 import random
 import streamlit as st
@@ -195,7 +196,8 @@ def process_ghg_data(indice, anio, base_folder="./upload_data", field_name=None)
             nf = np.argmax(VPf, axis=1)
             VPs = np.exp(-0.5 * ((XCs - Xs[k]) / sigmas) ** 2)
             ns = np.argmax(VPs, axis=1)
-            ME[nf, ns] += Xf[k]
+            #ME[nf, ns] += Xf[k]
+            ME[nf, ns] = (ME[nf, ns] + Xf[k]) / 2
             MP[nf, ns] = (MP[nf, ns] + Xs[k]) / 2
         
         ME[ME[:, :] == 0] = 1
@@ -223,106 +225,132 @@ def process_ghg_data(indice, anio, base_folder="./upload_data", field_name=None)
                     MCG[i, j] = (0.9 + 0.2 * random.random()) * CNG[4]
         
         # Generate management scenarios with proper sampling (from Jupyter notebook)
-        NDm = 100  # Number of sampling data
-        NGL = [1.5, 2, 3, 4]
-        MGR = ['Baseline']
-        MRm = []
+        nh = len(hojas.items())  # Number of satellite images
         LDAT = []
-        
-        # Baseline calculation with fuzzy sampling
-        LDAo = ME * MP
+        NDm = len(Xf)  # Number of sampling data
         
         # Sample frequency and severity data
         Xfm = pd.DataFrame(Xf).sample(n=NDm, replace=True)
         Xf2 = np.array(Xfm)
         Xsm = pd.DataFrame(Xs).sample(n=NDm, replace=True) 
         Xs2 = np.array(Xsm)
-        
-        # Apply fuzzy logic for baseline
         LDAo = Fuzzyx(Xf2, sigmaf, Xs2, sigmas, XCf, XCs, ME, MI, MI, MP)
         
+        # Determine risk levels using KMeans clustering
+        np.random.seed(42)
+        k = 5
+        mkm = KMeans(n_clusters=5, init='random', random_state=42)
+        mkm.fit(LDAo.reshape(-1, 1))
+        XC = sorted(mkm.cluster_centers_.flatten())
+        MIo = np.zeros((len(LDAo), 1))
+        MIo_G = np.zeros((len(LDAo), 1))
+        
+        for k in range(len(LDAo)):
+            MIo[k, ] = np.argmin(np.abs(XC - LDAo[k])) + 1
+        
+        # Baseline LDAo characterization
+        CNG = np.array([2, 5, 9, 14, 20])  # Management costs by risk level
         muo = np.mean(LDAo)
         OpVaro = np.percentile(LDAo, 99.9)
+        cas_o = skew(LDAo.ravel(), bias=False)
         PNEo = np.mean(LDAo[(LDAo >= muo) & (LDAo < OpVaro)])
-        
-        # Calculate risk events properly
-        NEProm = np.sum((ME * MI)) / np.sum(MI)  # Average losses per event
-        NEo = int(((np.sum(LDAo < muo)) / NDm) * np.sum(ME))
-        NSo = int(((np.sum(LDAo >= OpVaro) / NDm)) * np.sum(ME))
-        NNEo = int(((np.sum((LDAo >= muo) & (LDAo < OpVaro)) / NDm)) * np.sum(ME))
-        VCo = NNEo - NNEo  # Captured value
-        L75o = np.percentile(LDAo, 75)
-        CVCo = 0
-        
-        # Financial costs and income
-        MCT = (MCG * ME) / len(hojas.items())
-        CTA = np.sum(MCT)
-        XIng = (np.sum((0.9 + 0.2 * random.random()) * ME * Ingp) / len(hojas.items())) * 12
-        
-        MRm.append([muo, PNEo, L75o, OpVaro, NEo, NNEo, NSo, VCo, CVCo, CTA, XIng])
-        LDAT.append(LDAo.flatten())
-        
-        # Convert to array for column stacking
+        LDAT.append(LDAo)
         LDAT = np.array(LDAT)
         LDAT = np.array(LDAT.flatten())
         
+        NEProm = np.mean(Xsm)  # Average loss cost per event
+        filaso = np.where(LDAo <= muo)[0]
+        NEo = int((np.sum(Xf2[filaso, ]) / nh) * 12)
+        filass = np.where(LDAo >= OpVaro)[0]
+        NSo = int((np.sum(Xf2[filass, ]) / nh) * 12)
+        filasnne = np.where((LDAo >= muo) & (LDAo < OpVaro))[0]
+        NNEo = int((np.sum(Xf2[filasnne, ]) / nh) * 12)
+        NVCo = (NNEo - NNEo)
+        L75o = np.percentile(LDAo, 75)
+        CG = NVCo * np.percentile(Xs2, 25)  # Average management cost
+        CP = NVCo * np.percentile(Xs2, 99.9)  # Average loss cost
+        VCap = CP - CG
+        TCO2 = 0
+        
+        # Financial costs and income for field management activities
+        MCT = (MCG * ME) / len(hojas.items())  # Total annual cost matrix
+        CTA = np.sum(MCT)  # Total annual cost - Risk management
+        XIng = ((np.sum((0.9 + 0.2 * random.random()) * ME * Ingp) / len(hojas.items()))) * 12
+        IngOp = (XIng + VCap) - CTA
+        
+        MRm = []
+        MGR = []
+        MGR.append('Baseline')
+        MRm.append([muo, PNEo, L75o, OpVaro, cas_o, NEo, NNEo, NSo, NVCo, CG, CP, VCap, CTA, XIng, IngOp, TCO2])
+        MRm = np.array(MRm)
+        NGL = [1.5, 2, 3, 4]
+        
         # Management scenarios with proper fuzzy calculations
         for NG in NGL:
-            # Modify manageable values
-            MG = MI.astype(float).copy()
-            MG[(MG > 1) & (MG < 5)] *= NG
+            LDAm = np.zeros((len(LDAo), 1))
             
-            # Calculate LDA with management matrix
-            LDAm = (ME * MP * MI) / MG
-            
-            # Sample data for this scenario
             Xfm = pd.DataFrame(Xf).sample(n=NDm, replace=True)
             Xf2 = np.array(Xfm)
             Xsm = pd.DataFrame(Xs).sample(n=NDm, replace=True)
             Xs2 = np.array(Xsm)
+            LDAo_temp = Fuzzyx(Xf2, sigmaf, Xs2, sigmas, XCf, XCs, ME, MI, MI, MP)
             
-            # Apply fuzzy logic with management matrix
-            LDAm = Fuzzyx(Xf2, sigmaf, Xs2, sigmas, XCf, XCs, ME, MI, MG, MP)
+            # Modify manageable values
+            MG = MI.astype(float).copy()
+            MG[(MG > 1) & (MG < 5)] *= NG
+            
+            name = 'Matriz de Gestión ' + str(NG)
+            MG_ordenada, lbf_ordenada, lbs_ordenada = MatriX(MG, lbf, lbs, name)
+            
+            for k in range(len(LDAo)):
+                if 1 < MIo[k, ] < 5:
+                    MIo_G[k, ] = NG * MIo[k]
+                else:
+                    MIo_G[k, ] = MIo[k, ]
+                
+                LDAm[k, ] = LDAo[k, ] * (MIo[k, ] / MIo_G[k, ])
             
             # Stack LDA data for visualization
             LDAT = np.column_stack((LDAT, LDAm.flatten()))
             
             mu = np.mean(LDAm)
             OpVar = np.percentile(LDAm, 99.9)
+            cas_m = skew(LDAm.ravel(), bias=False)
             PNE = np.mean(LDAm[(LDAm >= mu) & (LDAm < OpVar)])
             
-            # Calculate risk events for this scenario
-            NEm = int(((np.sum(LDAm < muo) / NDm)) * np.sum(ME))
-            NSm = int(((np.sum(LDAm >= OpVaro) / NDm)) * np.sum(ME))
-            NNEm = int(((np.sum((LDAm >= muo) & (LDAm < OpVaro)) / NDm)) * np.sum(ME))
-            VCm = NNEo - NNEm  # Units saved
-            
-            # Update baseline values for next iteration
-            muo = mu
-            OpVaro = OpVar
-            
-            # Financial captured value calculation
-            MP_temp = MP.copy()
-            MP_temp[MP_temp == 0] = np.min(MP_temp[MP_temp > 0])
-            CVC = np.mean(LDAm) / NEProm  # Expected loss unit cost
-            CVC = np.sum((ME * MP_temp)) / np.sum(ME)
-            CVCs = np.percentile(LDAm, 99.9)  # Catastrophic loss unit cost
-            CVCs = np.percentile((ME * MP_temp) / ME, 99.9)
+            # Determine loss structure
+            filaso = np.where(LDAm <= muo)[0]
+            NEm = int((np.sum(Xf2[filaso, ]) / nh) * 12)
+            filass = np.where(LDAm >= OpVar)[0]
+            NSm = int((np.sum(Xf2[filass, ]) / nh) * 12)
+            filasnne = np.where((LDAm >= muo) & (LDAm < OpVar))[0]
+            NNEm = int((np.sum(Xf2[filasnne, ]) / nh) * 12)
+            NVCm = NEm - NEo
             L75 = np.percentile(LDAm, 75)
-            VC = VCm * ((CVCs - CVC))
+            CG = NVCm * np.percentile(Xsm, 25)  # Management value cost
+            CP = NVCm * np.percentile(Xsm, 99.9)  # Loss value cost
+            VCap = CP - CG
+            TCO2 = VCap / 250  # CO2 Ton cost
             
-            MGR.append(f'Level {NG}')
+            MGR.append('Level ' + str(NG))
             
-            # Management costs and income
-            MCT = (MCG * MG * ME) / (MI * len(hojas.items()))
+            # Financial costs and income for field management activities
+            MCT = (MCG * MG * ME) / (MI * len(hojas.items()))  # Total management cost matrix
             CTA = np.sum(MCT)
             XIng = (np.sum((0.9 + 0.2 * random.random()) * ME * Ingp) / len(hojas.items())) * 12
+            IngOp = (XIng + VCap) - CTA
             
-            MRm.append([mu, PNE, L75, OpVar, NEm, NNEm, NSm, VCm, VC, CTA, XIng])
+            MRm = np.vstack((MRm, np.array([mu, PNE, L75, OpVar, cas_m, NEm, NNEm, NSm, NVCm, CG, CP, VCap, CTA, XIng, IngOp, TCO2])))
+        
+        # Store reference values for visualization lines
+        media_val_o = MRm[0, 0]  # Baseline mean
+        opvar_val_o = MRm[0, 3]  # Baseline OpVar
+        media_val_g = MRm[-1, 0]  # Last management level mean
+        opvar_val_g = MRm[-1, 3]  # Last management level OpVar
         
         # Create results dataframe
         df_results = pd.DataFrame(MRm)
-        df_results.columns = ['Media (USD)', 'PNE (USD)', 'L75%', 'OpVar (USD)', 'NE', 'NNE', 'NS', 'NVC', 'VC (USD)', 'CG (USD)', 'Ing.']
+        df_results.columns = ['Media (USD)', 'PNE (USD)', 'L75%', 'OpVar (USD)', 'C.As.', 'NE', 'NNE', 'NS', 'NVC', 'CG (USD)', 'CP (USD)', 'VCap. (USD)', 'CGT (USD)', 'Ing. (USD)', 'IngOp.(USD)', 'TCO2(Ton.)']
         df_results.index = MGR
         df_results = df_results.round(2)
         
@@ -366,6 +394,12 @@ def process_ghg_data(indice, anio, base_folder="./upload_data", field_name=None)
             'frequency_labels': lbf,
             'severity_labels': lbs,
             'usd_cop_rate': usd_cop_rate,
+            'visualization_lines': {
+                'media_val_o': media_val_o,
+                'opvar_val_o': opvar_val_o,
+                'media_val_g': media_val_g,
+                'opvar_val_g': opvar_val_g
+            },
             'raw_data': {
                 'Xf': Xf,
                 'Xs': Xs,
@@ -403,8 +437,8 @@ def create_risk_matrix_heatmap(matrix, title, freq_labels, sev_labels):
     return fig
 
 
-def create_lda_distribution_plot(lda_data, mgr_labels):
-    """Create LDA distribution plot matching Jupyter notebook style"""
+def create_lda_distribution_plot(lda_data, mgr_labels, visualization_lines=None):
+    """Create LDA distribution plot matching Jupyter notebook style with reference lines"""
     fig = go.Figure()
     
     colors = ['red', 'orange', 'yellow', 'blue', 'green']
@@ -426,6 +460,24 @@ def create_lda_distribution_plot(lda_data, mgr_labels):
             histnorm='probability density',
             nbinsx=50
         ))
+    
+    # Add vertical reference lines if provided
+    if visualization_lines:
+        # Baseline lines (red)
+        fig.add_vline(x=visualization_lines['media_val_o'], 
+                     line_dash="dash", line_color="red", line_width=1.5,
+                     annotation_text="Media_O")
+        fig.add_vline(x=visualization_lines['opvar_val_o'], 
+                     line_dash="dot", line_color="red", line_width=1.5,
+                     annotation_text="OpVar_O")
+        
+        # Management lines (green)
+        fig.add_vline(x=visualization_lines['media_val_g'], 
+                     line_dash="dash", line_color="green", line_width=1.5,
+                     annotation_text="Media_G")
+        fig.add_vline(x=visualization_lines['opvar_val_g'], 
+                     line_dash="dot", line_color="green", line_width=1.5,
+                     annotation_text="OpVar_G")
     
     fig.update_layout(
         title="Risk Profile (LDA)",
@@ -466,7 +518,7 @@ def create_cost_benefit_chart(results_df):
     
     fig.add_trace(go.Scatter(
         x=results_df['CG (USD)'],
-        y=results_df['VC (USD)'],
+        y=results_df['VCap. (USD)'],  # Updated to match new column name
         mode='markers+text',
         text=results_df.index,
         textposition="top center",

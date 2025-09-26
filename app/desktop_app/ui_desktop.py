@@ -1057,6 +1057,17 @@ def render_ui() -> None:
     elif page_mode == "Risk Management":
         st.write("## GHG Capture & Risk Management")
         
+        # Information about the corrected implementation
+        st.info("""
+        🔧 **Enhanced Implementation Features:**
+        - ✅ Corrected KMeans clustering for risk level determination
+        - ✅ Individual risk modifications with MIo/MIo_G ratios
+        - ✅ Reference lines in Risk Profile LDA (Media_O, OpVar_O, Media_G, OpVar_G)
+        - ✅ Enhanced financial metrics with CO2 capture calculations
+        - ✅ Statistical analysis with skewness measurements
+        - ✅ Proper LDAT column stacking for visualization
+        """)
+        
         # Process GHG data
         if st.button("Process GHG Data"):
             with st.spinner("Processing GHG capture data..."):
@@ -1141,7 +1152,8 @@ def render_ui() -> None:
             st.subheader("Loss Distribution Analysis (LDA)")
             fig_lda = create_lda_distribution_plot(
                 ghg_data["lda_data"],
-                ghg_data["mgr_labels"]
+                ghg_data["mgr_labels"],
+                ghg_data.get("visualization_lines")  # Add the new reference lines parameter
             )
             st.plotly_chart(fig_lda, use_container_width=True)
         
@@ -1160,12 +1172,38 @@ def render_ui() -> None:
                 st.metric("Best Scenario", best_scenario, f"-{reduction:.1f}%")
             
             with metrics_cols[2]:
-                max_vc = ghg_data["results"]["VC (USD)"].max()
+                max_vc = ghg_data["results"]["VCap. (USD)"].max()  # Updated column name
                 st.metric("Max Value Captured", f"${max_vc:,.0f}")
             
             with metrics_cols[3]:
                 total_events = ghg_data["results"]["NE"].iloc[0]
                 st.metric("Total Risk Events", f"{total_events:,}")
+
+            # Enhanced metrics from corrected implementation
+            st.subheader("Enhanced Risk Analytics (Corrected Implementation)")
+            enhanced_cols = st.columns(4)
+            
+            with enhanced_cols[0]:
+                # CO2 Capture metrics
+                max_co2 = ghg_data["results"]["TCO2(Ton.)"].max()
+                st.metric("Max CO2 Capture", f"{max_co2:.3f} tons")
+            
+            with enhanced_cols[1]:
+                # Skewness analysis
+                baseline_skew = ghg_data["results"].loc["Baseline", "C.As."]
+                st.metric("Baseline Skewness", f"{baseline_skew:.4f}")
+            
+            with enhanced_cols[2]:
+                # Operational Income
+                max_op_income = ghg_data["results"]["IngOp.(USD)"].max()
+                st.metric("Max Op. Income", f"${max_op_income:,.0f}")
+            
+            with enhanced_cols[3]:
+                # Reference lines info
+                if "visualization_lines" in ghg_data:
+                    media_improvement = (ghg_data["visualization_lines"]["media_val_o"] - 
+                                       ghg_data["visualization_lines"]["media_val_g"])
+                    st.metric("Risk Reduction", f"${media_improvement:,.0f}")
         
         else:
             st.info("Click 'Process GHG Data' to analyze greenhouse gas capture and risk management scenarios.")
