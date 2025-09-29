@@ -117,7 +117,7 @@ def _save_riesgo_sheet(sheet_name: str, df_sheet: pd.DataFrame, manual_fn: Path)
 # ──────────────────────── MAIN MOBILE APP ───────────────────────
 def render_mobile() -> None:
     st.set_page_config(
-        page_title="Crop Health – Mobile", 
+        page_title="Salud de Cultivos – Móvil", 
         page_icon="📱",
         layout="wide",
         initial_sidebar_state="collapsed"
@@ -239,7 +239,7 @@ def render_mobile() -> None:
         unsafe_allow_html=True,
     )
 
-    st.title("📱 Crop Health (Mobile)")
+    st.title("📱 Salud de Cultivos (Móvil)")
     st.markdown("---")
 
     # --- field selection (matching desktop) -----------------------------
@@ -254,22 +254,22 @@ def render_mobile() -> None:
     
     # Field selection dropdown with proper display
     if available_fields:
-        field_options = available_fields + ["Create New Field"]
+        field_options = available_fields + ["Crear Nuevo Campo"]
         selected_field = st.selectbox(
-            "Select Field", 
+            "Seleccionar Campo", 
             field_options,
             key="field_selector"
         )
-        if selected_field == "Create New Field":
-            field_name = st.text_input("New Field Name", value="", key="new_field_input")
+        if selected_field == "Crear Nuevo Campo":
+            field_name = st.text_input("Nombre del Nuevo Campo", value="", key="new_field_input")
         else:
             field_name = selected_field
     else:
-        field_name = st.text_input("Field Name", value="Perimetro Prev", key="default_field_input")
+        field_name = st.text_input("Nombre del Campo", value="Perimetro Prev", key="default_field_input")
     
     # --- user inputs -----------------------------------------------------
-    indice = st.text_input("Vegetation Index", value="NDVI")
-    anio   = st.text_input("Year", value="2024")
+    indice = st.text_input("Índice de Vegetación", value="NDVI")
+    anio   = st.text_input("Año", value="2024")
 
     # Clear success messages when field or sheet changes
     current_context = f"{field_name}_{indice}_{anio}"
@@ -295,8 +295,8 @@ def render_mobile() -> None:
     st.markdown("---")
 
     if not qgis_path.exists():
-        st.warning(f"QGIS file not found at `{qgis_path}`")
-        qgis_path = st.file_uploader("Upload QGIS Excel", type=["xlsx", "xls"])
+        st.warning(f"Archivo QGIS no encontrado en `{qgis_path}`")
+        qgis_path = st.file_uploader("Subir Excel QGIS", type=["xlsx", "xls"])
     if not qgis_path:
         st.stop()
     
@@ -311,23 +311,23 @@ def render_mobile() -> None:
             thread = threading.Thread(target=init_excel)
             thread.daemon = True
             thread.start()
-            st.info(f"📊 Initializing Excel file for {field_name}...")
+            st.info(f"📊 Inicializando archivo Excel para {field_name}...")
 
     try:
         xls = pd.ExcelFile(qgis_path)
     except Exception as exc:
-        st.error(f"Error opening Excel: {exc}")
+        st.error(f"Error abriendo Excel: {exc}")
         st.stop()
 
     sheet_name = st.selectbox(
-        "Select NDVI sheet", 
+        "Seleccionar hoja NDVI", 
         xls.sheet_names,
         key="sheet_selector"
     )
     try:
         df = pd.read_excel(qgis_path, sheet_name=sheet_name)
     except Exception as exc:
-        st.error(f"Error reading sheet: {exc}")
+        st.error(f"Error leyendo hoja: {exc}")
         st.stop()
 
     # --- clean numeric cols ---------------------------------------------
@@ -336,7 +336,7 @@ def render_mobile() -> None:
     df["NDVI"]    = pd.to_numeric(df["NDVI"],    errors="coerce")
     df = df.dropna(subset=["long-xm", "long-ym", "NDVI"]).reset_index(drop=True)
     if df.empty:
-        st.error("No valid coordinate / NDVI data.")
+        st.error("No hay datos válidos de coordenadas / NDVI.")
         return
 
     # --- folium map ------------------------------------------------------
@@ -429,7 +429,7 @@ def render_mobile() -> None:
                 key="dl_manual_btn",
             )
     else:
-        st.info("📊 Excel file will be available for download once initialized or after first point update.")
+        st.info("📊 El archivo Excel estará disponible para descarga una vez inicializado o después de la primera actualización de punto.")
 
     if not click:
         st.info("Toca un punto en el mapa para editar su riesgo.")

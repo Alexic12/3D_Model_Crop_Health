@@ -21,8 +21,19 @@ import plotly.express as px
 from typing import Tuple, Dict
 
 
+# ======== CUSTOM NDVI COLORSCALE ========
 
-
+def get_custom_ndvi_colorscale():
+    """
+    Returns a custom Plotly colorscale that matches the 2D interactive plot's
+    red-orange-yellow-green color scheme.
+    """
+    return [
+        [0.0, 'red'],
+        [0.33, 'orange'], 
+        [0.66, 'yellow'],
+        [1.0, 'green']
+    ]
 
 
 # ======== MPLD3 for interactive hover tooltips ========
@@ -132,9 +143,9 @@ def create_2d_scatter_plot_ndvi(
         ax.set_facecolor("none")
 
         # White text for axes, ticks, spines
-        ax.set_title(f"NDVI Visualization - {sheet_name}", color='white')
-        ax.set_xlabel("X (Longitude)", color='white')
-        ax.set_ylabel("Y (Latitude)", color='white')
+        ax.set_title(f"Visualización NDVI - {sheet_name}", color='white')
+        ax.set_xlabel("X (Longitud)", color='white')
+        ax.set_ylabel("Y (Latitud)", color='white')
         ax.tick_params(axis='x', colors='white')
         ax.tick_params(axis='y', colors='white')
         for spine in ax.spines.values():
@@ -201,7 +212,7 @@ def create_2d_scatter_plot_ndvi(
         return fig
 
     except Exception as e:
-        st.error(f"Error creating 2D scatter plot: {e}")
+        st.error(f"Error creando gráfico de dispersión 2D: {e}")
         return None
     
 # -------------------------------------------------------------------
@@ -250,7 +261,7 @@ def create_2d_scatter_plot_ndvi_plotly(
 
     x, y, ndvi, riesgo = x[valid], y[valid], ndvi[valid], riesgo[valid]
     if x.empty:
-        st.error("❌ No valid coordinate rows to plot.")
+        st.error("❌ No hay filas de coordenadas válidas para graficar.")
         return go.Figure(), pd.DataFrame()
 
     # ── Layout knobs ─────────────────────────────────────────────────
@@ -274,7 +285,7 @@ def create_2d_scatter_plot_ndvi_plotly(
         marker=dict(
             size=marker_size,
             color=ndvi,
-            colorscale="Viridis",
+            colorscale=get_custom_ndvi_colorscale(),
             cmin=-1, cmax=1,
             colorbar=dict(title="NDVI"),
             line=dict(width=2, color="white"),
@@ -287,7 +298,7 @@ def create_2d_scatter_plot_ndvi_plotly(
 
     fig = go.Figure(scatter)
     fig.update_layout(
-        title=dict(text=f"Interactive NDVI – {sheet_name}", font=dict(size=font_size+4, color="white")),
+        title=dict(text=f"NDVI Interactivo – {sheet_name}", font=dict(size=font_size+4, color="white")),
         paper_bgcolor="black",
         plot_bgcolor="black",
         font=dict(color="white", size=font_size),
@@ -296,14 +307,14 @@ def create_2d_scatter_plot_ndvi_plotly(
         dragmode="pan",
         clickmode="event+select",
         xaxis=dict(
-            title="Longitude",
+            title="Longitud",
             range=[x.min() - lon_pad, x.max() + lon_pad],
             fixedrange=True,
             showgrid=False,
             zeroline=False,
         ),
         yaxis=dict(
-            title="Latitude",
+            title="Latitud",
             range=[y.min() - lat_pad, y.max() + lat_pad],
             fixedrange=True,
             scaleanchor="x",
@@ -339,7 +350,7 @@ def create_2d_scatter_plot_ndvi_interactive_qgis(
         # 1) Ensure required columns
         for col in ["long-xm", "long-ym", "NDVI", "Riesgo"]:
             if col not in qgis_df.columns:
-                st.error(f"Missing column '{col}' in QGIS DataFrame => cannot plot.")
+                st.error(f"Falta la columna '{col}' en el DataFrame QGIS => no se puede graficar.")
                 return None
 
         x_plot = qgis_df["long-xm"].values  # longitude
@@ -357,9 +368,9 @@ def create_2d_scatter_plot_ndvi_interactive_qgis(
         fig.patch.set_facecolor("black")
         ax.set_facecolor("black")
 
-        ax.set_xlabel("Longitude", fontsize=12, fontweight='bold', color='white')  
-        ax.set_ylabel("Latitude", fontsize=12, fontweight='bold', color='white')
-        ax.set_title(f"Interactive NDVI - {sheet_name}", fontsize=14, fontweight='bold', color='white')
+        ax.set_xlabel("Longitud", fontsize=12, fontweight='bold', color='white')  
+        ax.set_ylabel("Latitud", fontsize=12, fontweight='bold', color='white')
+        ax.set_title(f"NDVI Interactivo - {sheet_name}", fontsize=14, fontweight='bold', color='white')
 
         for label in ax.get_xticklabels(): label.set_color('white')
         for label in ax.get_yticklabels(): label.set_color('white')
@@ -549,7 +560,7 @@ def create_2d_scatter_plot_ndvi_interactive_qgis(
         return html_str
 
     except Exception as e:
-        st.error(f"Error creating interactive QGIS 2D scatter: {e}")
+        st.error(f"Error creando dispersión 2D interactiva QGIS: {e}")
         logger.exception("Error in create_2d_scatter_plot_ndvi_interactive_qgis")
         return None
 
@@ -580,32 +591,35 @@ def create_3d_surface_plot(
 
         zi *= z_scale
         cmin, cmax = zi.min(), zi.max()
+        
+        # Use custom NDVI colorscale to match 2D interactive plot
+        custom_colorscale = get_custom_ndvi_colorscale()
 
         fig = go.Figure(data=[go.Surface(
             x=xi,
             y=yi,
             z=zi,
             surfacecolor=zi,
-            colorscale=color_map,
+            colorscale=custom_colorscale,
             colorbar=dict(title='NDVI'),
             cmin=cmin,
             cmax=cmax
         )])
         fig.update_layout(
-            title='Crop Health 3D Surface (NDVI)',
+            title='Superficie 3D de Salud de Cultivos (NDVI)',
             width=1000,
             height=1000,
             scene=dict(
-                xaxis_title='Longitude',
-                yaxis_title='Latitude',
+                xaxis_title='Longitud',
+                yaxis_title='Latitud',
                 zaxis_title='NDVI'
             ),
             autosize=True
         )
         fig.update_traces(
             hovertemplate=(
-                'Longitude: %{x:.2f}<br>'
-                'Latitude: %{y:.2f}<br>'
+                'Longitud: %{x:.2f}<br>'
+                'Latitud: %{y:.2f}<br>'
                 'NDVI: %{z:.3f}'
             )
         )
@@ -613,7 +627,7 @@ def create_3d_surface_plot(
 
     except Exception as e:
         logger.exception("Error in create_3d_surface_plot")
-        st.error(f"Error in create_3d_surface_plot: {e}")
+        st.error(f"Error en create_3d_surface_plot: {e}")
         return None
 
 
@@ -697,7 +711,7 @@ def create_3d_simulation_plot_sea_keypoints(
                 y=yi,
                 z=zi_frame,
                 surfacecolor=zi_frame,
-                colorscale=color_map,
+                colorscale=get_custom_ndvi_colorscale(),
                 colorbar=dict(title='NDVI'),
                 cmin=z_min,
                 cmax=z_max
@@ -710,7 +724,7 @@ def create_3d_simulation_plot_sea_keypoints(
                 y=yi,
                 z=base_z,
                 surfacecolor=base_z,
-                colorscale=color_map,
+                colorscale=get_custom_ndvi_colorscale(),
                 colorbar=dict(title='NDVI'),
                 cmin=z_min,
                 cmax=z_max
@@ -718,11 +732,11 @@ def create_3d_simulation_plot_sea_keypoints(
             frames=frames
         )
         fig.update_layout(
-            title='3D Sea Simulation (NDVI-based)',
+            title='Simulación 3D Marina (basada en NDVI)',
             width=900, height=900,
             scene=dict(
-                xaxis_title='Longitude',
-                yaxis_title='Latitude',
+                xaxis_title='Longitud',
+                yaxis_title='Latitud',
                 zaxis_title='NDVI',
                 zaxis=dict(range=[z_min, z_max])
             ),
@@ -731,7 +745,7 @@ def create_3d_simulation_plot_sea_keypoints(
                     type='buttons',
                     buttons=[
                         dict(
-                            label='Play',
+                            label='Reproducir',
                             method='animate',
                             args=[None, {
                                 "frame": {"duration": 33, "redraw": True},
@@ -741,7 +755,7 @@ def create_3d_simulation_plot_sea_keypoints(
                             }]
                         ),
                         dict(
-                            label='Pause',
+                            label='Pausar',
                             method='animate',
                             args=[
                                 [None],
@@ -759,7 +773,7 @@ def create_3d_simulation_plot_sea_keypoints(
         )
         return fig
     except Exception as e:
-        st.error(f"Error in sea simulation: {e}")
+        st.error(f"Error en simulación marina: {e}")
         logger.exception("Sea simulation error")
         return None
 
@@ -825,6 +839,9 @@ def create_3d_simulation_plot_time_interpolation(
 
         frames = []
         ndvi_first = ndvi_grids[0]
+        # Use custom NDVI colorscale to match 2D interactive plot
+        custom_colorscale = get_custom_ndvi_colorscale()
+        
         for i in range(len(ndvi_grids) - 1):
             start_grid = ndvi_grids[i]
             end_grid = ndvi_grids[i + 1]
@@ -836,7 +853,7 @@ def create_3d_simulation_plot_time_interpolation(
                     y=yi,
                     z=ndvi_interp,
                     surfacecolor=ndvi_interp,
-                    colorscale=color_map,
+                    colorscale=custom_colorscale,
                     colorbar=dict(title='NDVI'),
                     cmin=global_min,
                     cmax=global_max
@@ -850,7 +867,7 @@ def create_3d_simulation_plot_time_interpolation(
                 y=yi,
                 z=ndvi_first,
                 surfacecolor=ndvi_first,
-                colorscale=color_map,
+                colorscale=custom_colorscale,
                 colorbar=dict(title='NDVI'),
                 cmin=global_min,
                 cmax=global_max
@@ -859,17 +876,17 @@ def create_3d_simulation_plot_time_interpolation(
         )
 
         fig.update_layout(
-            title='Time-Series Interpolation of NDVI',
+            title='Interpolación de Series Temporales de NDVI',
             width=900,
             height=900,
             scene=dict(
                 xaxis=dict(
-                    title=dict(text='Longitude', font=dict(color="white")),
+                    title=dict(text='Longitud', font=dict(color="white")),
                     tickfont=dict(color="white"),
                     color="white"  # ✅ Forces white axis elements
                 ),
                 yaxis=dict(
-                    title=dict(text='Latitude', font=dict(color="white")),  # ✅ White Title
+                    title=dict(text='Latitud', font=dict(color="white")),  # ✅ White Title
                     tickfont=dict(color="white")  # ✅ White Tick Labels
                 ),
                 zaxis=dict(
@@ -883,7 +900,7 @@ def create_3d_simulation_plot_time_interpolation(
                     type='buttons',
                     buttons=[
                         dict(
-                            label='Play',
+                            label='Reproducir',
                             method='animate',
                             args=[None, {
                                 "frame": {"duration": 100, "redraw": True},
@@ -893,7 +910,7 @@ def create_3d_simulation_plot_time_interpolation(
                             }]
                         ),
                         dict(
-                            label='Pause',
+                            label='Pausar',
                             method='animate',
                             args=[
                                 [None],
@@ -910,6 +927,6 @@ def create_3d_simulation_plot_time_interpolation(
         )
         return fig
     except Exception as e:
-        st.error(f"Time-series simulation error: {e}")
+        st.error(f"Error de simulación de series temporales: {e}")
         logger.exception("Time-series simulation error")
         return None

@@ -335,14 +335,14 @@ def _responsive_css() -> None:
 
 def render_ui() -> None:
     st.set_page_config(
-        page_title="Crop Health Visualization",
+        page_title="Visualización de Salud de Cultivos",
         page_icon="🌿",
         layout="wide",
         initial_sidebar_state="expanded",
         menu_items={
             'Get Help': 'https://docs.streamlit.io',
             'Report a bug': 'mailto:support@crophealth.com',
-            'About': 'Crop Health Visualization Platform v2.0'
+            'About': 'Plataforma de Visualización de Salud de Cultivos v2.0'
         }
     )
     _responsive_css()
@@ -361,14 +361,14 @@ def render_ui() -> None:
     from app.ui.responsive_components import ResponsiveLayout
     ResponsiveLayout.responsive_container()
 
-    st.title("Crop Health Visualization")
+    st.title("Visualización de Salud de Cultivos")
     st.write("---")
-    page_mode = st.radio("Select Visualization Page", ["3D Visualization", "Prospective Visualization", "Risk Management"], index=0)
+    page_mode = st.radio("Seleccionar Página de Visualización", ["Visualización 3D", "Visualización Prospectiva", "Gestión de Riesgos"], index=0)
     st.write("---")
 
     # ---------------- SIDEBAR ----------------
     with st.sidebar:
-        st.header("Settings")
+        st.header("Configuraciones")
 
         # Get available fields from existing folders
         base_folder = "./upload_data"
@@ -401,26 +401,26 @@ def render_ui() -> None:
             elif auto_detected and auto_detected in available_fields:
                 default_idx = available_fields.index(auto_detected)
             
-            selected_field = st.selectbox("Select Field", available_fields + ["Create New Field"], index=default_idx)
-            if selected_field == "Create New Field":
-                field_name = st.text_input("New Field Name", value="")
+            selected_field = st.selectbox("Seleccionar Campo", available_fields + ["Crear Nuevo Campo"], index=default_idx)
+            if selected_field == "Crear Nuevo Campo":
+                field_name = st.text_input("Nombre del Nuevo Campo", value="")
             else:
                 field_name = selected_field
         else:
-            field_name = st.text_input("Field Name", value="Perimetro Prev")
+            field_name = st.text_input("Nombre del Campo", value="Perimetro Prev")
         
-        indice = st.text_input("Vegetation Index", value="NDVI")
-        anio = st.text_input("Year", value="2024")
+        indice = st.text_input("Índice de Vegetación", value="NDVI")
+        anio = st.text_input("Año", value="2024")
         st.write("---")
 
         # Google Maps API Key from configuration
         google_api_key = settings.GOOGLE_MAPS_API_KEY
         if not google_api_key:
-            st.info("No GOOGLE_MAPS_API_KEY configured. Interactive basemap may be limited.")
+            st.info("No se configuró GOOGLE_MAPS_API_KEY. El mapa base interactivo puede estar limitado.")
 
-        st.subheader("Bulk NDVI ZIP Analysis")
+        st.subheader("Análisis Masivo de ZIP NDVI")
         uploaded_files = st.file_uploader(
-            "Upload .zip pairs (base + ColorMap) and climate Excel file", 
+            "Subir pares .zip (base + ColorMap) y archivo Excel de clima", 
             type=["zip", "xlsx", "xls"], 
             accept_multiple_files=True
         )
@@ -458,7 +458,7 @@ def render_ui() -> None:
             if detected_field:
                 # Always use detected field name, override current selection
                 field_name = detected_field
-                st.info(f"Auto-detected field: {detected_field}. Files ready for processing.")
+                st.info(f"Campo auto-detectado: {detected_field}. Archivos listos para procesar.")
                 # Store in session state to update dropdown and files
                 st.session_state["auto_detected_field"] = detected_field
                 st.session_state["uploaded_zip_files"] = zip_files
@@ -469,24 +469,24 @@ def render_ui() -> None:
                     st.rerun()
             else:
                 st.session_state["uploaded_zip_files"] = zip_files
-                st.info("Files ready for processing. Click 'Run Bulk Analysis' to process.")
+                st.info("Archivos listos para procesar. Haz clic en 'Ejecutar Análisis Masivo' para procesar.")
             
             # Handle Excel files (climate data)
             if excel_files:
                 st.session_state["uploaded_excel_files"] = excel_files
                 climate_names = [f.name for f in excel_files]
-                st.info(f"Climate files detected: {', '.join(climate_names)}")
+                st.info(f"Archivos de clima detectados: {', '.join(climate_names)}")
 
-        if st.button("Run Bulk Analysis"):
+        if st.button("Ejecutar Análisis Masivo"):
             if not field_name:
-                st.error("Please select or enter a field name.")
+                st.error("Por favor selecciona o ingresa un nombre de campo.")
             elif "uploaded_zip_files" not in st.session_state:
-                st.error("No ZIP files uploaded. Please upload files first.")
+                st.error("No se subieron archivos ZIP. Por favor sube archivos primero.")
             else:
                 # Use auto-detected field name if available
                 if "current_field_name" in st.session_state:
                     field_name = st.session_state["current_field_name"]
-                    st.info(f"Using detected field name: {field_name}")
+                    st.info(f"Usando nombre de campo detectado: {field_name}")
                 
                 # Extract field name from ZIP files as backup using improved patterns
                 zip_files = st.session_state["uploaded_zip_files"]
@@ -514,7 +514,7 @@ def render_ui() -> None:
                     
                     if detected_field:
                         field_name = detected_field
-                        st.info(f"Re-detected field name from ZIP: {field_name}")
+                        st.info(f"Nombre de campo re-detectado del ZIP: {field_name}")
                 
                 # First, save the uploaded files
                 field_folder = os.path.join(base_folder, field_name)
@@ -536,9 +536,9 @@ def render_ui() -> None:
                         outpath = os.path.join(subfolder, climate_name)
                         with open(outpath, "wb") as f:
                             f.write(ef.getbuffer())
-                        st.success(f"Climate file saved as: {climate_name}")
+                        st.success(f"Archivo de clima guardado como: {climate_name}")
                 
-                st.success(f"All files saved to {field_name}/{indice}/{anio}.")
+                st.success(f"Todos los archivos guardados en {field_name}/{indice}/{anio}.")
                 
                 # Then process the files
                 esp_xlsx, idw_xlsx, qgis_xlsx = bulk_unzip_and_analyze_new_parallel(
@@ -577,19 +577,19 @@ def render_ui() -> None:
         qgis_file = os.path.join(output_dir, f"INFORME_{indice}_QGIS_{anio}.xlsx")
         
         st.write("---")
-        st.subheader("Download Processed Files")
+        st.subheader("Descargar Archivos Procesados")
         if os.path.exists(esp_file):
             with open(esp_file, "rb") as f:
-                st.download_button("Download Espacial", data=f, file_name=os.path.basename(esp_file), key="dl_esp")
+                st.download_button("Descargar Espacial", data=f, file_name=os.path.basename(esp_file), key="dl_esp")
         if os.path.exists(idw_file):
             with open(idw_file, "rb") as f:
-                st.download_button("Download IDW", data=f, file_name=os.path.basename(idw_file), key="dl_idw")
+                st.download_button("Descargar IDW", data=f, file_name=os.path.basename(idw_file), key="dl_idw")
         if os.path.exists(qgis_file):
             with open(qgis_file, "rb") as f:
-                st.download_button("Download QGIS", data=f, file_name=os.path.basename(qgis_file), key="dl_qgis")
+                st.download_button("Descargar QGIS", data=f, file_name=os.path.basename(qgis_file), key="dl_qgis")
 
-        with st.expander("Invert Climate Excel Rows"):
-            climate_file = st.file_uploader("Upload Climate Excel", type=["xlsx", "xls"])
+        with st.expander("Invertir Filas de Excel de Clima"):
+            climate_file = st.file_uploader("Subir Excel de Clima", type=["xlsx", "xls"])
             if climate_file:
                 df_inv = invert_climate_file_rows(climate_file)
                 if df_inv is not None:
@@ -601,27 +601,27 @@ def render_ui() -> None:
                     df_inv.to_excel(buf, index=False)
                     buf.seek(0)
                     st.download_button(
-                        "Download Inverted Excel",
+                        "Descargar Excel Invertido",
                         data=buf,
                         file_name="clima_inverted.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                     )
 
-        with st.expander("Advanced Sliders", expanded=False):
-            grid_size = st.slider("Grid Resolution", 5, 300, 50, step=5)
-            z_scale = st.slider("Z Scale", 0.1, 2.0, 1.0, step=0.1)
-            smoothness = st.slider("Surface Smoothness (Gaussian)", 0.0, 10.0, 1.0, step=0.1)
-            color_map = st.selectbox("Color Map", ["viridis", "plasma", "inferno", "magma", "cividis"])
-            steps_value = st.slider("Time interpolation steps", 1, 20, 10)
+        with st.expander("Deslizadores Avanzados", expanded=False):
+            grid_size = st.slider("Resolución de Cuadrícula", 5, 300, 50, step=5)
+            z_scale = st.slider("Escala Z", 0.1, 2.0, 1.0, step=0.1)
+            smoothness = st.slider("Suavidad de Superficie (Gaussiana)", 0.0, 10.0, 1.0, step=0.1)
+            color_map = st.selectbox("Mapa de Color", ["viridis", "plasma", "inferno", "magma", "cividis"])
+            steps_value = st.slider("Pasos de interpolación temporal", 1, 20, 10)
             st.write("---")
 
     # ---------------- MAIN PAGE CONTENT ----------------
     # Responsive navigation for mobile
     if st.session_state.get('viewport_width', 1200) < 768:
-        with st.expander("📱 Navigation Menu", expanded=False):
-            page_mode = st.radio("Select Page", ["3D Visualization", "Prospective Visualization", "Risk Management"], horizontal=True)
+        with st.expander("📱 Menú de Navegación", expanded=False):
+            page_mode = st.radio("Seleccionar Página", ["Visualización 3D", "Visualización Prospectiva", "Gestión de Riesgos"], horizontal=True)
     
-    if page_mode == "3D Visualization":
+    if page_mode == "Visualización 3D":
 
         # Check for an existing processed IDW path
         current_field = st.session_state.get("current_field", field_name)
@@ -649,7 +649,7 @@ def render_ui() -> None:
             processed_disabled = False
             processed_path = idw_file
 
-        visualize_processed_btn = st.button("Visualize Processed Data", disabled=processed_disabled)
+        visualize_processed_btn = st.button("Visualizar Datos Procesados", disabled=processed_disabled)
         if visualize_processed_btn:
             st.session_state["show_processed_data"] = True
 
@@ -660,7 +660,7 @@ def render_ui() -> None:
             if data_sheets:
                 sheet_list = list(data_sheets.keys())
                 chosen_sheet_processed = st.selectbox(
-                    "Select sheet for processed data (static 3D & 2D)", sheet_list, key="processed_sheet_selector"
+                    "Seleccionar hoja para datos procesados (3D estático y 2D)", sheet_list, key="processed_sheet_selector"
                 )
 
                 col1, col2 = st.columns([1.3, 1], gap="medium")
@@ -681,12 +681,12 @@ def render_ui() -> None:
                             f"INFORME_{indice}_QGIS_{anio}.xlsx",
                         )
                     if not os.path.exists(qgis_file):
-                        st.error(f"QGIS file not found => {qgis_file}")
+                        st.error(f"Archivo QGIS no encontrado => {qgis_file}")
                     else:
                         try:
                             xls = pd.ExcelFile(qgis_file)
                             if chosen_sheet_processed not in xls.sheet_names:
-                                st.error(f"Sheet '{chosen_sheet_processed}' not in QGIS => {xls.sheet_names}")
+                                st.error(f"Hoja '{chosen_sheet_processed}' no está en QGIS => {xls.sheet_names}")
                             else:
                                 df_qgis = pd.read_excel(qgis_file, sheet_name=chosen_sheet_processed)
                                 html_2d = create_2d_scatter_plot_ndvi_interactive_qgis(
@@ -701,9 +701,9 @@ def render_ui() -> None:
                                     components.html(html_2d, height=700, scrolling=True)  # ← no key
                                     st.markdown("</div>", unsafe_allow_html=True)
                                 else:
-                                    st.error("Could not create interactive QGIS chart.")
+                                    st.error("No se pudo crear el gráfico interactivo QGIS.")
                         except Exception as e:
-                            st.error(f"Error reading QGIS => {e}")
+                            st.error(f"Error leyendo QGIS => {e}")
 
                 with col2:
                     # Show corresponding NDVI ColorMap image instead of 3D plot
@@ -761,13 +761,13 @@ def render_ui() -> None:
                 )
                 if fig_time:
                     fig_time.update_layout(margin=dict(l=0, r=0, t=30, b=0))
-                    st.markdown("#### Time-Series 3D Animation")
+                    st.markdown("#### Animación 3D de Series Temporales")
                     st.plotly_chart(fig_time, use_container_width=True)
             else:
                 # Single-sheet processed fallback
                 df_single = process_uploaded_file(processed_path)
                 if df_single is None:
-                    st.error("Could not parse processed data. It may not match the expected format.")
+                    st.error("No se pudieron analizar los datos procesados. Puede que no coincidan con el formato esperado.")
                 elif all(col in df_single.columns for col in ("Longitud", "Latitud", "NDVI")):
                     lat_vals = df_single["Latitud"].values
                     lon_vals = df_single["Longitud"].values
@@ -811,18 +811,18 @@ def render_ui() -> None:
 
                     if fig_wave:
                         fig_wave.update_layout(margin=dict(l=0, r=0, t=30, b=0))
-                        st.markdown("#### Wave-Based 3D Animation (Processed Single-Sheet)")
+                        st.markdown("#### Animación 3D Basada en Ondas (Hoja Única Procesada)")
                         st.plotly_chart(fig_wave, use_container_width=True)
                 else:
-                    st.error("Processed data does not contain the required columns or sheets.")
+                    st.error("Los datos procesados no contienen las columnas u hojas requeridas.")
 
-    elif page_mode == "Prospective Visualization":
-        st.write("## Prospective Visualization")
+    elif page_mode == "Visualización Prospectiva":
+        st.write("## Visualización Prospectiva")
 
         # 1) HPC Data Option: run or reuse
         if "hpc_data" not in st.session_state:
-            st.warning("No HPC data found in session. Click the button to run HPC pipeline.")
-            if st.button("Run HPC Pipeline"):
+            st.warning("No se encontraron datos HPC en la sesión. Haz clic en el botón para ejecutar el pipeline HPC.")
+            if st.button("Ejecutar Pipeline HPC"):
                 try:
                     if field_name:
                         # Ensure field_name uses underscores for consistency
@@ -832,23 +832,23 @@ def render_ui() -> None:
                         field_base_folder = "./upload_data"
                     hpc_data = run_full_hpc_pipeline(indice, anio, base_folder=field_base_folder)
                     if hpc_data is None:
-                        st.error("HPC pipeline returned None. Check logs or file paths.")
+                        st.error("El pipeline HPC devolvió None. Revisa los logs o rutas de archivos.")
                     else:
                         st.session_state["hpc_data"] = hpc_data
                         # Show data source information
                         if hpc_data.get("using_mock_data", False):
-                            st.warning("⚠️ HPC pipeline completed using **MOCK climate data** (no real climate file was uploaded). Results are for testing purposes only.")
+                            st.warning("⚠️ Pipeline HPC completado usando **datos de clima SIMULADOS** (no se subió ningún archivo de clima real). Los resultados son solo para pruebas.")
                         else:
-                            st.success("✅ HPC pipeline completed using **REAL climate data**. Results are based on actual weather measurements.")
+                            st.success("✅ Pipeline HPC completado usando **datos de clima REALES**. Los resultados se basan en mediciones meteorológicas reales.")
                 except Exception as e:
-                    st.error(f"Error running HPC pipeline => {e}")
+                    st.error(f"Error ejecutando pipeline HPC => {e}")
         else:
             hpc_data = st.session_state["hpc_data"]
             # Show current data source status
             if hpc_data.get("using_mock_data", False):
-                st.info("📊 HPC Data loaded (using **MOCK climate data**). Below you can visualize the test results.")
+                st.info("📊 Datos HPC cargados (usando **datos de clima SIMULADOS**). Abajo puedes visualizar los resultados de prueba.")
             else:
-                st.info("📊 HPC Data loaded (using **REAL climate data**). Below you can visualize the results.")
+                st.info("📊 Datos HPC cargados (usando **datos de clima REALES**). Abajo puedes visualizar los resultados.")
 
         # 2) IDW/QGIS Visualization
         current_field = st.session_state.get("current_field", field_name)
@@ -884,7 +884,7 @@ def render_ui() -> None:
         if data_sheets:
             sheet_list = list(data_sheets.keys())
             chosen_sheet_processed = st.selectbox(
-                "Select sheet for processed data (static 3D & 2D)", sheet_list, key="processed_sheet_selector"
+                "Seleccionar hoja para datos procesados (3D estático y 2D)", sheet_list, key="processed_sheet_selector"
             )
 
             # HPC data selection
@@ -892,9 +892,9 @@ def render_ui() -> None:
             if "hpc_data" in st.session_state:
                 hpc_data = st.session_state["hpc_data"]
                 results = hpc_data.get("results", [])
-                point_labels = [f"(Point={r['point_idx']})" for r in results]
+                point_labels = [f"(Punto={r['point_idx']})" for r in results]
                 if point_labels:
-                    chosen_point = st.selectbox("Select HPC point result", point_labels)
+                    chosen_point = st.selectbox("Seleccionar resultado de punto HPC", point_labels)
                     chosen_idx = point_labels.index(chosen_point)
                     HPC_info = results[chosen_idx]
 
@@ -916,12 +916,12 @@ def render_ui() -> None:
                         f"INFORME_{indice}_QGIS_{anio}.xlsx",
                     )
                 if not os.path.exists(qgis_file):
-                    st.error(f"QGIS file not found => {qgis_file}")
+                    st.error(f"Archivo QGIS no encontrado => {qgis_file}")
                 else:
                     try:
                         xls = pd.ExcelFile(qgis_file)
                         if chosen_sheet_processed not in xls.sheet_names:
-                            st.error(f"Sheet '{chosen_sheet_processed}' not in QGIS => {xls.sheet_names}")
+                            st.error(f"Hoja '{chosen_sheet_processed}' no está en QGIS => {xls.sheet_names}")
                         else:
                             df_qgis = pd.read_excel(qgis_file, sheet_name=chosen_sheet_processed)
                             html_2d = create_2d_scatter_plot_ndvi_interactive_qgis(
@@ -937,9 +937,9 @@ def render_ui() -> None:
                                 components.html(html_2d, height=700, scrolling=True)  # height must match function's height_px
                                 st.markdown("</div>", unsafe_allow_html=True)
                             else:
-                                st.error("Could not create interactive QGIS chart.")
+                                st.error("No se pudo crear el gráfico interactivo QGIS.")
                     except Exception as e:
-                        st.error(f"Error reading QGIS => {e}")
+                        st.error(f"Error leyendo QGIS => {e}")
 
             with col2:
                 lat_arr = data_sheets[chosen_sheet_processed]["lat"]
@@ -960,8 +960,8 @@ def render_ui() -> None:
                     # XInf2 = HPC_info["XInf"]
 
                     # Add data source indicator to section header
-                    data_source = "Mock Data" if hpc_data.get("using_mock_data", False) else "Real Data"
-                    st.markdown(f"## Monthly Risk Evolution ({data_source})")
+                    data_source = "Datos Simulados" if hpc_data.get("using_mock_data", False) else "Datos Reales"
+                    st.markdown(f"## Evolución de Riesgo Mensual ({data_source})")
 
                     fig = go.Figure()
                     n_months = XLDA.shape[1]
@@ -978,21 +978,21 @@ def render_ui() -> None:
                                 y=density,
                                 mode="lines",
                                 fill="tozeroy",
-                                name=f"Month {m+1}",
-                                hovertemplate="Month: %{text}<br>Loss: %{x:.2f}<br>Density: %{y:.2f}",
-                                text=[f"Month {m+1}"] * len(x_range),
+                                name=f"Mes {m+1}",
+                                hovertemplate="Mes: %{text}<br>Pérdida: %{x:.2f}<br>Densidad: %{y:.2f}",
+                                text=[f"Mes {m+1}"] * len(x_range),
                             )
                         )
 
                     fig.update_layout(
-                        xaxis_title="Losses (USD/Month-Zone)",
-                        yaxis_title="Density",
+                        xaxis_title="Pérdidas (USD/Mes-Zona)",
+                        yaxis_title="Densidad",
                         showlegend=True,
                         margin=dict(l=0, r=0, t=30, b=0),
                     )
                     st.plotly_chart(fig, use_container_width=True, use_container_height=True)
                 else:
-                    st.info("No HPC data loaded/selected. Run the pipeline or pick a point.")
+                    st.info("No hay datos HPC cargados/seleccionados. Ejecuta el pipeline o elige un punto.")
 
             st.markdown("---")
 
@@ -1046,88 +1046,88 @@ def render_ui() -> None:
                     df_hpc[col_] = df_hpc[col_].astype(float).map("{:.3f}".format)
 
                 # Add data source indicator to table header
-                data_source = "Mock Data" if hpc_data.get("using_mock_data", False) else "Real Data"
-                st.markdown(f"### HPC Risk Data Table ({data_source})")
+                data_source = "Datos Simulados" if hpc_data.get("using_mock_data", False) else "Datos Reales"
+                st.markdown(f"### Tabla de Datos de Riesgo HPC ({data_source})")
                 st.dataframe(df_hpc)
             else:
-                st.info("No HPC data loaded. Please click 'Run HPC Pipeline' to compute results.")
+                st.info("No hay datos HPC cargados. Por favor haz clic en 'Ejecutar Pipeline HPC' para calcular resultados.")
         else:
-            st.info("No IDW data to visualize or file not found. Upload or process .zip for NDVI data if needed.")
+            st.info("No hay datos IDW para visualizar o archivo no encontrado. Sube o procesa .zip para datos NDVI si es necesario.")
 
-    elif page_mode == "Risk Management":
-        st.write("## GHG Capture & Risk Management")
+    elif page_mode == "Gestión de Riesgos":
+        st.write("## Captura de GEI y Gestión de Riesgos")
         
         # Information about the corrected implementation
         st.info("""
-        🔧 **Enhanced Implementation Features:**
-        - ✅ Corrected KMeans clustering for risk level determination
-        - ✅ Individual risk modifications with MIo/MIo_G ratios
-        - ✅ Reference lines in Risk Profile LDA (Media_O, OpVar_O, Media_G, OpVar_G)
-        - ✅ Enhanced financial metrics with CO2 capture calculations
-        - ✅ Statistical analysis with skewness measurements
-        - ✅ Proper LDAT column stacking for visualization
+        🔧 **Características de Implementación Mejorada:**
+        - ✅ Clustering KMeans corregido para determinación de nivel de riesgo
+        - ✅ Modificaciones de riesgo individuales con ratios MIo/MIo_G
+        - ✅ Líneas de referencia en Perfil de Riesgo LDA (Media_O, OpVar_O, Media_G, OpVar_G)
+        - ✅ Métricas financieras mejoradas con cálculos de captura de CO2
+        - ✅ Análisis estadístico con mediciones de asimetría
+        - ✅ Apilado de columnas LDAT adecuado para visualización
         """)
         
         # Process GHG data
-        if st.button("Process GHG Data"):
-            with st.spinner("Processing GHG capture data..."):
+        if st.button("Procesar Datos de GEI"):
+            with st.spinner("Procesando datos de captura de GEI..."):
                 # Ensure field_name uses underscores for consistency
                 safe_field_name = field_name.replace(' ', '_') if field_name else None
                 ghg_data = process_ghg_data(indice, anio, base_folder="./upload_data", field_name=safe_field_name)
                 if ghg_data:
                     st.session_state["ghg_data"] = ghg_data
-                    st.success("GHG data processed successfully!")
+                    st.success("¡Datos de GEI procesados exitosamente!")
                 else:
-                    st.error("Failed to process GHG data. Check if required files exist.")
+                    st.error("Falló el procesamiento de datos de GEI. Verifica si existen los archivos requeridos.")
         
         # Display results if data exists
         if "ghg_data" in st.session_state:
             ghg_data = st.session_state["ghg_data"]
             
             # Display cluster information
-            st.subheader("Cluster Analysis")
-            st.info(f"Exchange Rate: 1 USD = {ghg_data['usd_cop_rate']:,.0f} COP")
+            st.subheader("Análisis de Clusters")
+            st.info(f"Tasa de Cambio: 1 USD = {ghg_data['usd_cop_rate']:,.0f} COP")
             st.dataframe(ghg_data["clusters"])
             
             # Risk matrices visualization
             col1, col2 = st.columns(2)
             
             with col1:
-                st.subheader("Events Matrix")
+                st.subheader("Matriz de Eventos")
                 fig_events = create_risk_matrix_heatmap(
                     ghg_data["events_matrix"], 
-                    "Events Matrix",
+                    "Matriz de Eventos",
                     ghg_data["frequency_labels"],
                     ghg_data["severity_labels"]
                 )
                 st.plotly_chart(fig_events, use_container_width=True)
             
             with col2:
-                st.subheader("Losses Matrix")
+                st.subheader("Matriz de Pérdidas")
                 fig_losses = create_risk_matrix_heatmap(
                     ghg_data["losses_matrix"], 
-                    "Losses Matrix (USD)",
+                    "Matriz de Pérdidas (USD)",
                     ghg_data["frequency_labels"],
                     ghg_data["severity_labels"]
                 )
                 st.plotly_chart(fig_losses, use_container_width=True)
             
             # Impact matrix
-            st.subheader("Impact Matrix")
+            st.subheader("Matriz de Impacto")
             fig_impact = create_risk_matrix_heatmap(
                 ghg_data["impact_matrix"], 
-                "Impact Matrix",
+                "Matriz de Impacto",
                 ghg_data["frequency_labels"],
                 ghg_data["severity_labels"]
             )
             st.plotly_chart(fig_impact, use_container_width=True)
             
             # Management results table
-            st.subheader("Risk Management Scenarios")
+            st.subheader("Escenarios de Gestión de Riesgos")
             st.dataframe(ghg_data["results"])
             
             # Management matrices visualization
-            st.subheader("Management Matrices")
+            st.subheader("Matrices de Gestión")
             if "management_matrices" in ghg_data:
                 matrix_cols = st.columns(2)
                 matrix_names = list(ghg_data["management_matrices"].keys())
@@ -1137,19 +1137,19 @@ def render_ui() -> None:
                     with matrix_cols[col_idx]:
                         fig_matrix = create_management_matrix_heatmap(
                             matrix,
-                            f"Management Matrix - {name}",
+                            f"Matriz de Gestión - {name}",
                             ghg_data["frequency_labels"],
                             ghg_data["severity_labels"]
                         )
                         st.plotly_chart(fig_matrix, use_container_width=True)
             
             # Cost-benefit analysis
-            st.subheader("Cost-Benefit Analysis")
+            st.subheader("Análisis Costo-Beneficio")
             fig_cost_benefit = create_cost_benefit_chart(ghg_data["results"])
             st.plotly_chart(fig_cost_benefit, use_container_width=True)
             
             # LDA distribution plot
-            st.subheader("Loss Distribution Analysis (LDA)")
+            st.subheader("Análisis de Distribución de Pérdidas (LDA)")
             fig_lda = create_lda_distribution_plot(
                 ghg_data["lda_data"],
                 ghg_data["mgr_labels"],
@@ -1158,55 +1158,55 @@ def render_ui() -> None:
             st.plotly_chart(fig_lda, use_container_width=True)
         
             # Additional metrics dashboard
-            st.subheader("Risk Metrics Summary")
+            st.subheader("Resumen de Métricas de Riesgo")
             metrics_cols = st.columns(4)
             
             with metrics_cols[0]:
                 baseline_loss = ghg_data["results"].loc["Baseline", "Media (USD)"]
-                st.metric("Baseline Loss", f"${baseline_loss:,.0f}")
+                st.metric("Pérdida Base", f"${baseline_loss:,.0f}")
             
             with metrics_cols[1]:
                 best_scenario = ghg_data["results"]["Media (USD)"].idxmin()
                 best_loss = ghg_data["results"].loc[best_scenario, "Media (USD)"]
                 reduction = ((baseline_loss - best_loss) / baseline_loss) * 100
-                st.metric("Best Scenario", best_scenario, f"-{reduction:.1f}%")
+                st.metric("Mejor Escenario", best_scenario, f"-{reduction:.1f}%")
             
             with metrics_cols[2]:
                 max_vc = ghg_data["results"]["VCap. (USD)"].max()  # Updated column name
-                st.metric("Max Value Captured", f"${max_vc:,.0f}")
+                st.metric("Máximo Valor Capturado", f"${max_vc:,.0f}")
             
             with metrics_cols[3]:
                 total_events = ghg_data["results"]["NE"].iloc[0]
-                st.metric("Total Risk Events", f"{total_events:,}")
+                st.metric("Total Eventos de Riesgo", f"{total_events:,}")
 
             # Enhanced metrics from corrected implementation
-            st.subheader("Enhanced Risk Analytics (Corrected Implementation)")
+            st.subheader("Análisis de Riesgo Mejorado (Implementación Corregida)")
             enhanced_cols = st.columns(4)
             
             with enhanced_cols[0]:
                 # CO2 Capture metrics
                 max_co2 = ghg_data["results"]["TCO2(Ton.)"].max()
-                st.metric("Max CO2 Capture", f"{max_co2:.3f} tons")
+                st.metric("Máxima Captura CO2", f"{max_co2:.3f} toneladas")
             
             with enhanced_cols[1]:
                 # Skewness analysis
                 baseline_skew = ghg_data["results"].loc["Baseline", "C.As."]
-                st.metric("Baseline Skewness", f"{baseline_skew:.4f}")
+                st.metric("Asimetría Base", f"{baseline_skew:.4f}")
             
             with enhanced_cols[2]:
                 # Operational Income
                 max_op_income = ghg_data["results"]["IngOp.(USD)"].max()
-                st.metric("Max Op. Income", f"${max_op_income:,.0f}")
+                st.metric("Máximo Ingreso Op.", f"${max_op_income:,.0f}")
             
             with enhanced_cols[3]:
                 # Reference lines info
                 if "visualization_lines" in ghg_data:
                     media_improvement = (ghg_data["visualization_lines"]["media_val_o"] - 
                                        ghg_data["visualization_lines"]["media_val_g"])
-                    st.metric("Risk Reduction", f"${media_improvement:,.0f}")
+                    st.metric("Reducción de Riesgo", f"${media_improvement:,.0f}")
         
         else:
-            st.info("Click 'Process GHG Data' to analyze greenhouse gas capture and risk management scenarios.")
+            st.info("Haz clic en 'Procesar Datos de GEI' para analizar escenarios de captura de gases de efecto invernadero y gestión de riesgos.")
 
 
 # ---------------------- MAIN EXECUTION ENTRY ----------------------
