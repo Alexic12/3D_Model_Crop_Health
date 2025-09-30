@@ -51,6 +51,436 @@ from app.ui.visualization import (
 logger = logging.getLogger(__name__)
 
 
+def create_ghg_analysis_excel(ghg_data, field_name=None):
+    """
+    Create a comprehensive Excel file with GHG risk analysis data for professional use.
+    
+    Args:
+        ghg_data: GHG analysis dictionary containing all risk scenarios and matrices
+        field_name: Optional field name for context
+    
+    Returns:
+        BytesIO: Excel file as bytes buffer
+    """
+    print("🔍 DEBUG: Starting GHG Excel generation")
+    print(f"🔍 DEBUG: ghg_data keys: {list(ghg_data.keys()) if ghg_data else 'None'}")
+    
+    import io
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils.dataframe import dataframe_to_rows
+    import pandas as pd
+    import numpy as np
+    
+    def convert_to_excel_compatible(value):
+        """Convert numpy types and arrays to Excel-compatible Python types."""
+        # Check if it's a numpy scalar first (has dtype but no shape or shape is ())
+        if hasattr(value, 'dtype') and (not hasattr(value, 'shape') or value.shape == ()):
+            if value.dtype.kind in 'fc':  # float or complex
+                return float(value)
+            elif value.dtype.kind in 'iu':  # integer or unsigned
+                return int(value)
+            else:
+                return str(value)
+        # Check if it's a numpy array (has shape and it's not empty)
+        elif hasattr(value, 'shape') and hasattr(value, 'tolist'):
+            return [convert_to_excel_compatible(item) for item in value.tolist()]
+        elif isinstance(value, (list, tuple)):
+            return [convert_to_excel_compatible(item) for item in value]
+        else:
+            return value
+    
+    def convert_labels_to_excel(labels):
+        """Convert labels (which might be numpy arrays) to list of strings for Excel."""
+        converted = convert_to_excel_compatible(labels)
+        
+        # Handle nested arrays - flatten if we get a list of lists
+        if isinstance(converted, list) and len(converted) == 1 and isinstance(converted[0], list):
+            # This handles cases like [['Muy Pocos', 'Pocos', ...]] -> ['Muy Pocos', 'Pocos', ...]
+            flattened = converted[0]
+            return [str(item) for item in flattened]
+        elif isinstance(converted, list):
+            return [str(item) for item in converted]
+        else:
+            return [str(converted)]
+    
+    # Create workbook
+    wb = Workbook()
+    # Remove default sheet safely
+    if wb.active:
+        wb.remove(wb.active)
+    
+    # Define styling
+    header_font = Font(bold=True, color="FFFFFF")
+    header_fill = PatternFill(start_color="2F4F4F", end_color="2F4F4F", fill_type="solid")
+    subheader_font = Font(bold=True, color="000000")
+    subheader_fill = PatternFill(start_color="E6E6FA", end_color="E6E6FA", fill_type="solid")
+    border = Border(left=Side(style='thin'), right=Side(style='thin'), 
+                   top=Side(style='thin'), bottom=Side(style='thin'))
+    
+    # 1. Executive Summary Sheet
+    summary_ws = wb.create_sheet("📊 Resumen Ejecutivo")
+    summary_ws.append(["ANÁLISIS DE RIESGO Y CAPTURA DE GEI"])
+    summary_ws.append([""])
+    summary_ws.append(["Campo:", field_name or "N/A"])
+    summary_ws.append(["Fecha de Análisis:", pd.Timestamp.now().strftime("%Y-%m-%d %H:%M")])
+    summary_ws.append([""])
+    
+    # Key metrics summary
+    if "results" in ghg_data and not ghg_data["results"].empty:
+        baseline_loss = ghg_data["results"].loc["Baseline", "Media (USD)"] if "Baseline" in ghg_data["results"].index else 0
+        best_scenario = ghg_data["results"]["Media (USD)"].idxmin()
+        best_loss = ghg_data["results"].loc[best_scenario, "Media (USD)"]
+        max_co2 = ghg_data["results"]["TCO2(Ton.)"].max()
+        
+        summary_ws.append(["MÉTRICAS CLAVE"])
+        summary_ws.append(["Pérdida Baseline (USD):", f"${baseline_loss:,.0f}"])
+        summary_ws.append(["Mejor Escenario:", best_scenario])
+        summary_ws.append(["Pérdida Mejor Escenario (USD):", f"${best_loss:,.0f}"])
+        summary_ws.append(["Reducción Potencial (%):", f"{((baseline_loss - best_loss) / baseline_loss * 100):.1f}%"])
+        summary_ws.append(["Máxima Captura CO2 (Ton):", f"{max_co2:.3f}"])
+    
+    # 2. Risk Scenarios Sheet
+    scenarios_ws = wb.create_sheet("📈 Escenarios de Riesgo")
+    scenarios_ws.append(["ESCENARIOS DE GESTIÓN DE RIESGOS"])
+    scenarios_ws.append([""])
+    
+    if "results" in ghg_data and not ghg_data["results"].empty:
+        # Add dataframe to worksheet with proper type conversion
+        for r in dataframe_to_rows(ghg_data["results"], index=True, header=True):
+            # Convert numpy types to Python types
+            clean_row = []
+            for item in r:
+                if hasattr(item, 'dtype'):  # numpy type
+                    if item.dtype.kind in 'fc':  # float or complex
+                        clean_row.append(float(item))
+                    elif item.dtype.kind in 'iu':  # integer or unsigned
+                        clean_row.append(int(item))
+                    else:
+                        clean_row.append(str(item))
+                else:
+                    clean_row.append(item)
+            scenarios_ws.append(clean_row)
+    
+    # 3. Impact Matrix Sheet
+    print("🔍 DEBUG: Processing Impact Matrix")
+    if "impact_matrix" in ghg_data:
+        print("🔍 DEBUG: Found impact_matrix in ghg_data")
+        impact_ws = wb.create_sheet("🎯 Matriz de Impacto")
+        impact_ws.append(["MATRIZ DE IMPACTO - FRECUENCIA VS SEVERIDAD"])
+        impact_ws.append([""])
+        
+        # Convert numpy array to proper format
+        impact_matrix = ghg_data["impact_matrix"]
+        print(f"🔍 DEBUG: impact_matrix type: {type(impact_matrix)}")
+        print(f"🔍 DEBUG: impact_matrix shape: {impact_matrix.shape if hasattr(impact_matrix, 'shape') else 'No shape'}")
+        
+        if hasattr(impact_matrix, 'shape'):  # It's a numpy array
+            # Add frequency labels as column headers - convert numpy arrays to lists
+            freq_labels = ghg_data.get("frequency_labels", [f"Freq_{i}" for i in range(impact_matrix.shape[1])])
+            sev_labels = ghg_data.get("severity_labels", [f"Sev_{i}" for i in range(impact_matrix.shape[0])])
+            
+            # Convert numpy arrays to Excel-compatible format
+            freq_labels = convert_labels_to_excel(freq_labels)
+            sev_labels = convert_labels_to_excel(sev_labels)
+            
+            print(f"🔍 DEBUG: Converted labels - freq: {len(freq_labels)} items, sev: {len(sev_labels)} items")
+            
+            # Create matrix with labels
+            header_row = ["Severidad \\ Frecuencia"] + freq_labels
+            impact_ws.append(header_row)
+            
+            for i, sev_label in enumerate(sev_labels):
+                # Ensure sev_label is properly converted 
+                sev_label_str = convert_to_excel_compatible(sev_label)
+                sev_label_str = sev_label_str if isinstance(sev_label_str, str) else str(sev_label_str)
+                
+                row = [sev_label_str] + [convert_to_excel_compatible(impact_matrix[i, j]) for j in range(impact_matrix.shape[1])]
+                impact_ws.append(row)
+            
+            print("🔍 DEBUG: Impact matrix processed successfully")
+    
+    # 4. Management Matrices Sheet
+    if "management_matrices" in ghg_data:
+        mgmt_ws = wb.create_sheet("🛡️ Matrices de Gestión")
+        mgmt_ws.append(["MATRICES DE ESTRATEGIAS DE GESTIÓN"])
+        mgmt_ws.append([""])
+        
+        for strategy_name, matrix in ghg_data["management_matrices"].items():
+            mgmt_ws.append([f"ESTRATEGIA: {str(strategy_name)}"])
+            
+            if hasattr(matrix, 'shape'):  # It's a numpy array
+                freq_labels = ghg_data.get("frequency_labels", [f"Freq_{i}" for i in range(matrix.shape[1])])
+                sev_labels = ghg_data.get("severity_labels", [f"Sev_{i}" for i in range(matrix.shape[0])])
+                
+                # Convert numpy arrays to Excel-compatible format
+                freq_labels = convert_labels_to_excel(freq_labels)
+                sev_labels = convert_labels_to_excel(sev_labels)
+                
+                header_row = ["Severidad \\ Frecuencia"] + freq_labels
+                mgmt_ws.append(header_row)
+                
+                for i, sev_label in enumerate(sev_labels):
+                    # Ensure sev_label is properly converted 
+                    sev_label_str = convert_to_excel_compatible(sev_label)
+                    sev_label_str = sev_label_str if isinstance(sev_label_str, str) else str(sev_label_str)
+                    row = [sev_label_str] + [convert_to_excel_compatible(matrix[i, j]) for j in range(matrix.shape[1])]
+                    mgmt_ws.append(row)
+            else:
+                # Fallback for non-numpy data
+                mgmt_ws.append(["Datos no disponibles en formato de matriz"])
+            
+            mgmt_ws.append([""])  # Separator between strategies
+    
+    # 5. LDA Analysis Sheet
+    if "lda_data" in ghg_data:
+        lda_ws = wb.create_sheet("📉 Análisis LDA")
+        lda_ws.append(["ANÁLISIS DE DISTRIBUCIÓN DE PÉRDIDAS (LDA)"])
+        lda_ws.append([""])
+        
+        try:
+            print("🔍 DEBUG: Processing LDA data")
+            # Convert LDA data to DataFrame if it's not already
+            if isinstance(ghg_data["lda_data"], pd.DataFrame):
+                lda_df = ghg_data["lda_data"]
+                print(f"🔍 DEBUG: LDA data is already a DataFrame: {lda_df.shape}")
+            else:
+                # If it's array data, create a structured DataFrame
+                lda_data = ghg_data["lda_data"]
+                print(f"🔍 DEBUG: LDA data type: {type(lda_data)}")
+                
+                if hasattr(lda_data, 'shape'):  # numpy array
+                    print(f"🔍 DEBUG: LDA data shape: {lda_data.shape}")
+                    mgr_labels = ghg_data.get("mgr_labels", [f"Scenario_{i}" for i in range(lda_data.shape[0])])
+                    print(f"🔍 DEBUG: mgr_labels length: {len(mgr_labels)} vs data rows: {lda_data.shape[0]}")
+                    
+                    # Fix: Create proper row indices based on actual data shape
+                    if len(mgr_labels) != lda_data.shape[0]:
+                        print(f"🔍 DEBUG: Mismatch detected - creating proper row indices")
+                        mgr_labels = [f"Row_{i}" for i in range(lda_data.shape[0])]
+                    
+                    # Create column names if needed
+                    if lda_data.shape[1] > 1:
+                        column_names = [f"Column_{i}" for i in range(lda_data.shape[1])]
+                        lda_df = pd.DataFrame(lda_data, index=mgr_labels, columns=column_names)
+                    else:
+                        lda_df = pd.DataFrame(lda_data, index=mgr_labels)
+                    
+                elif isinstance(lda_data, (list, tuple)):
+                    print(f"🔍 DEBUG: LDA data is list/tuple with length: {len(lda_data)}")
+                    mgr_labels = ghg_data.get("mgr_labels", [f"Scenario_{i}" for i in range(len(lda_data))])
+                    if len(mgr_labels) != len(lda_data):
+                        mgr_labels = [f"Row_{i}" for i in range(len(lda_data))]
+                    lda_df = pd.DataFrame(lda_data, index=mgr_labels)
+                else:
+                    lda_ws.append(["Datos LDA no disponibles en formato compatible"])
+                    lda_df = None
+            
+            if lda_df is not None:
+                print(f"🔍 DEBUG: Final LDA DataFrame shape: {lda_df.shape}")
+                print(f"🔍 DEBUG: LDA DataFrame columns: {list(lda_df.columns)}")
+                
+                # Add LDA data to worksheet
+                for r in dataframe_to_rows(lda_df, index=True, header=True):
+                    # Convert numpy types to Python types
+                    clean_row = []
+                    for item in r:
+                        if hasattr(item, 'dtype'):  # numpy type
+                            if item.dtype.kind in 'fc':  # float or complex
+                                clean_row.append(float(item))
+                            elif item.dtype.kind in 'iu':  # integer or unsigned
+                                clean_row.append(int(item))
+                            else:
+                                clean_row.append(str(item))
+                        else:
+                            clean_row.append(item)
+                    lda_ws.append(clean_row)
+                print("🔍 DEBUG: LDA data processed successfully")
+        except Exception as e:
+            print(f"🚨 ERROR: LDA processing failed: {e}")
+            import traceback
+            print(f"🚨 ERROR: LDA traceback: {traceback.format_exc()}")
+            lda_ws.append([f"Error procesando datos LDA: {str(e)}"])
+    
+    # 6. Financial Analysis Sheet
+    financial_ws = wb.create_sheet("💰 Análisis Financiero")
+    financial_ws.append(["ANÁLISIS COSTO-BENEFICIO"])
+    financial_ws.append([""])
+    
+    if "results" in ghg_data and not ghg_data["results"].empty:
+        # Extract financial columns
+        financial_cols = ["Media (USD)", "VCap. (USD)", "IngOp.(USD)", "TCO2(Ton.)"]
+        available_cols = [col for col in financial_cols if col in ghg_data["results"].columns]
+        
+        if available_cols:
+            financial_data = ghg_data["results"][available_cols].copy()
+            for r in dataframe_to_rows(financial_data, index=True, header=True):
+                # Convert numpy types to Python types
+                clean_row = []
+                for item in r:
+                    if hasattr(item, 'dtype'):  # numpy type
+                        if item.dtype.kind in 'fc':  # float or complex
+                            clean_row.append(float(item))
+                        elif item.dtype.kind in 'iu':  # integer or unsigned
+                            clean_row.append(int(item))
+                        else:
+                            clean_row.append(str(item))
+                    else:
+                        clean_row.append(item)
+                financial_ws.append(clean_row)
+    
+    # Apply styling to all sheets
+    for ws in wb.worksheets:
+        # Style the first row (main headers)
+        if ws.max_row > 0:
+            for cell in ws[1]:
+                if cell.value:
+                    cell.font = header_font
+                    cell.fill = header_fill
+                    cell.alignment = Alignment(horizontal="center", vertical="center")
+        
+        # Auto-adjust column widths
+        from openpyxl.utils import get_column_letter
+        for col_num, column in enumerate(ws.columns, 1):
+            max_length = 0
+            column_letter = get_column_letter(col_num)
+            for cell in column:
+                try:
+                    if cell.value and len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            adjusted_width = min(max_length + 2, 30)  # Cap at 30 characters
+            ws.column_dimensions[column_letter].width = adjusted_width
+    
+        # Save to BytesIO buffer
+        print("🔍 DEBUG: Saving workbook to buffer")
+        buffer = io.BytesIO()
+        wb.save(buffer)
+        buffer.seek(0)
+        print("🔍 DEBUG: Excel generation completed successfully")
+        return buffer
+
+
+def create_complete_excel_data(hpc_data, indice):
+    """
+    Create a comprehensive Excel file with all HPC data for all points and dates.
+    
+    Args:
+        hpc_data: HPC data dictionary containing results for all points
+        indice: The vegetation index name (e.g., NDVI)
+    
+    Returns:
+        BytesIO: Excel file as bytes buffer
+    """
+    import io
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment
+    
+    # Create workbook
+    wb = Workbook()
+    # Remove default sheet safely
+    if wb.active:
+        wb.remove(wb.active)
+    
+    results = hpc_data.get("results", [])
+    data_source = "Simulados" if hpc_data.get("using_mock_data", False) else "Reales"
+    
+    # Create summary sheet
+    summary_ws = wb.create_sheet("📋 Resumen")
+    summary_ws.append(["Resumen del Análisis HPC"])
+    summary_ws.append(["Índice de vegetación:", indice])
+    summary_ws.append(["Fuente de datos:", f"Datos {data_source}"])
+    summary_ws.append(["Total de puntos:", len(results)])
+    summary_ws.append(["Meses analizados:", "12"])
+    summary_ws.append([""])
+    summary_ws.append(["Punto", "Lat", "Lon", "Disponible"])
+    
+    # Add point summary
+    for result in results:
+        point_idx = result.get("point_idx", "N/A")
+        # Extract coordinates if available
+        lat = "N/A"
+        lon = "N/A" 
+        summary_ws.append([f"Punto {point_idx}", lat, lon, "✅"])
+    
+    # Create detailed sheet for each point
+    for result in results:
+        point_idx = result.get("point_idx", "N/A")
+        sheet_name = f"📍 Punto {point_idx}"
+        
+        # Create worksheet for this point
+        ws = wb.create_sheet(sheet_name)
+        
+        # Add header information
+        ws.append([f"Datos HPC - Punto {point_idx}"])
+        ws.append([f"Índice: {indice}"])
+        ws.append([f"Fuente: Datos {data_source}"])
+        ws.append([""])
+        
+        # Get data arrays
+        XLDA = result.get("XLDA", None)
+        VC = result.get("VC", [])
+        XInf = result.get("XInf", None)
+        
+        if XLDA is not None and XInf is not None:
+            # Create monthly data table
+            columns = [
+                "Mes", "WD", "Max C", "Min C", "Viento (m/s)", 
+                "Humedad (%)", "Precip. (mm)", f"{indice}", "Skewness",
+                "%C1", "%C2", "%C3", "Mean (USD)", "75% (USD)", "OpVar-99% (USD)"
+            ]
+            
+            # Add column headers
+            ws.append(columns)
+            
+            # Add data for each month
+            n_months = min(12, XInf.shape[0] if XInf.ndim > 0 else 12)
+            for month_i in range(n_months):
+                wd = VC[month_i] if month_i < len(VC) else f"WD_{month_i}"
+                
+                if XInf.ndim > 1:
+                    row_data = [
+                        f"Mes {month_i + 1}",
+                        wd,
+                        f"{XInf[month_i, 0]:.3f}" if XInf.shape[1] > 0 else "N/A",
+                        f"{XInf[month_i, 1]:.3f}" if XInf.shape[1] > 1 else "N/A",
+                        f"{XInf[month_i, 2]:.3f}" if XInf.shape[1] > 2 else "N/A",
+                        f"{XInf[month_i, 3]:.3f}" if XInf.shape[1] > 3 else "N/A",
+                        f"{XInf[month_i, 4]:.3f}" if XInf.shape[1] > 4 else "N/A",
+                        f"{XInf[month_i, 8]:.3f}" if XInf.shape[1] > 8 else "N/A",
+                        f"{XInf[month_i, 5]:.3f}" if XInf.shape[1] > 5 else "N/A",
+                        f"{XInf[month_i, 6]:.3f}" if XInf.shape[1] > 6 else "N/A",
+                        f"{XInf[month_i, 7]:.3f}" if XInf.shape[1] > 7 else "N/A",
+                        f"{XInf[month_i, 8]:.3f}" if XInf.shape[1] > 8 else "N/A",
+                        f"{XInf[month_i, 9]:.3f}" if XInf.shape[1] > 9 else "N/A",
+                        f"{XInf[month_i, 10]:.3f}" if XInf.shape[1] > 10 else "N/A",
+                        f"{XInf[month_i, 11]:.3f}" if XInf.shape[1] > 11 else "N/A",
+                    ]
+                else:
+                    # Fallback for 1D or unexpected shapes
+                    row_data = [f"Mes {month_i + 1}", wd] + ["N/A"] * (len(columns) - 2)
+                
+                ws.append(row_data)
+        else:
+            ws.append(["No hay datos disponibles para este punto"])
+    
+    # Style the workbook
+    for ws in wb.worksheets:
+        # Style headers
+        for row in ws.iter_rows(min_row=1, max_row=1):
+            for cell in row:
+                cell.font = Font(bold=True)
+                cell.fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+                cell.alignment = Alignment(horizontal="center")
+    
+    # Save to BytesIO buffer
+    buffer = io.BytesIO()
+    wb.save(buffer)
+    buffer.seek(0)
+    return buffer
+
+
 def _responsive_css() -> None:
     """Inject responsive CSS with mobile-first design and accessibility features."""
     st.markdown(
@@ -972,6 +1402,11 @@ def render_ui() -> None:
                         kde = gaussian_kde(month_data)
                         x_range = np.linspace(month_data.min(), month_data.max(), 200)
                         density = kde(x_range)
+                        
+                        # Define which months are initially visible (2, 6, 8, 10, 12)
+                        initially_visible_months = [2, 3, 6, 9, 12]
+                        is_visible = (m + 1) in initially_visible_months
+                        
                         fig.add_trace(
                             go.Scatter(
                                 x=x_range,
@@ -981,6 +1416,7 @@ def render_ui() -> None:
                                 name=f"Mes {m+1}",
                                 hovertemplate="Mes: %{text}<br>Pérdida: %{x:.2f}<br>Densidad: %{y:.2f}",
                                 text=[f"Mes {m+1}"] * len(x_range),
+                                visible=is_visible,  # Set initial visibility
                             )
                         )
 
@@ -998,6 +1434,7 @@ def render_ui() -> None:
 
             # 3) HPC Risk Distributions & Table from HPC Data
             if "hpc_data" in st.session_state and HPC_info is not None:
+                hpc_data = st.session_state["hpc_data"]
                 XLDA = HPC_info["XLDA"]
                 VC = HPC_info["VC"]
                 XInf2 = HPC_info["XInf"]
@@ -1049,6 +1486,40 @@ def render_ui() -> None:
                 data_source = "Datos Simulados" if hpc_data.get("using_mock_data", False) else "Datos Reales"
                 st.markdown(f"### Tabla de Datos de Riesgo HPC ({data_source})")
                 st.dataframe(df_hpc)
+                
+                # Add download button for all points and dates
+                st.markdown("---")
+                st.markdown("### 📥 Descarga de Datos Completos")
+                
+                col_download1, col_download2 = st.columns([1, 2])
+                with col_download1:
+                    if st.button("📊 Descargar Excel Completo", help="Descarga todos los puntos y fechas en un archivo Excel"):
+                        try:
+                            # Create Excel data for all points
+                            excel_buffer = create_complete_excel_data(hpc_data, indice)
+                            
+                            st.download_button(
+                                label="💾 Guardar archivo Excel",
+                                data=excel_buffer,
+                                file_name=f"HPC_Datos_Completos_{indice}_{data_source.replace(' ', '_')}.xlsx",
+                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                                help="Descarga el archivo con todos los datos de todos los puntos y fechas"
+                            )
+                            st.success("✅ Archivo Excel preparado para descarga")
+                            
+                        except Exception as e:
+                            st.error(f"Error generando archivo Excel: {e}")
+                
+                with col_download2:
+                    total_points = len(hpc_data.get("results", []))
+                    st.info(f"""
+                    **Contenido del archivo Excel:**
+                    - 📍 **{total_points} puntos** de análisis
+                    - 📅 **12 meses** de predicción por punto  
+                    - 📊 **Todas las variables** HPC (clima, riesgo, estadísticas)
+                    - 🏷️ **Origen:** {data_source}
+                    """)
+                    
             else:
                 st.info("No hay datos HPC cargados. Por favor haz clic en 'Ejecutar Pipeline HPC' para calcular resultados.")
         else:
@@ -1056,17 +1527,6 @@ def render_ui() -> None:
 
     elif page_mode == "Gestión de Riesgos":
         st.write("## Captura de GEI y Gestión de Riesgos")
-        
-        # Information about the corrected implementation
-        st.info("""
-        🔧 **Características de Implementación Mejorada:**
-        - ✅ Clustering KMeans corregido para determinación de nivel de riesgo
-        - ✅ Modificaciones de riesgo individuales con ratios MIo/MIo_G
-        - ✅ Líneas de referencia en Perfil de Riesgo LDA (Media_O, OpVar_O, Media_G, OpVar_G)
-        - ✅ Métricas financieras mejoradas con cálculos de captura de CO2
-        - ✅ Análisis estadístico con mediciones de asimetría
-        - ✅ Apilado de columnas LDAT adecuado para visualización
-        """)
         
         # Process GHG data
         if st.button("Procesar Datos de GEI"):
@@ -1112,8 +1572,15 @@ def render_ui() -> None:
                 )
                 st.plotly_chart(fig_losses, use_container_width=True)
             
+            # Management results table
+            st.subheader("Escenarios de Gestión de Riesgos")
+            st.dataframe(ghg_data["results"])
+            
+            # Combined matrices section: Impact matrix and Management matrices
+            st.subheader("Matrices de Gestión")
+            
             # Impact matrix
-            st.subheader("Matriz de Impacto")
+            st.markdown("### Matriz de Impacto")
             fig_impact = create_risk_matrix_heatmap(
                 ghg_data["impact_matrix"], 
                 "Matriz de Impacto",
@@ -1122,13 +1589,9 @@ def render_ui() -> None:
             )
             st.plotly_chart(fig_impact, use_container_width=True)
             
-            # Management results table
-            st.subheader("Escenarios de Gestión de Riesgos")
-            st.dataframe(ghg_data["results"])
-            
             # Management matrices visualization
-            st.subheader("Matrices de Gestión")
             if "management_matrices" in ghg_data:
+                st.markdown("### Matrices de Estrategias de Gestión")
                 matrix_cols = st.columns(2)
                 matrix_names = list(ghg_data["management_matrices"].keys())
                 
@@ -1157,8 +1620,11 @@ def render_ui() -> None:
             )
             st.plotly_chart(fig_lda, use_container_width=True)
         
-            # Additional metrics dashboard
+            # Comprehensive metrics dashboard
             st.subheader("Resumen de Métricas de Riesgo")
+            
+            # Basic risk metrics
+            st.markdown("### Métricas Básicas de Riesgo")
             metrics_cols = st.columns(4)
             
             with metrics_cols[0]:
@@ -1179,8 +1645,8 @@ def render_ui() -> None:
                 total_events = ghg_data["results"]["NE"].iloc[0]
                 st.metric("Total Eventos de Riesgo", f"{total_events:,}")
 
-            # Enhanced metrics from corrected implementation
-            st.subheader("Análisis de Riesgo Mejorado (Implementación Corregida)")
+            # Advanced risk analysis
+            st.markdown("### Análisis Avanzado de Riesgo")
             enhanced_cols = st.columns(4)
             
             with enhanced_cols[0]:
@@ -1204,6 +1670,51 @@ def render_ui() -> None:
                     media_improvement = (ghg_data["visualization_lines"]["media_val_o"] - 
                                        ghg_data["visualization_lines"]["media_val_g"])
                     st.metric("Reducción de Riesgo", f"${media_improvement:,.0f}")
+            
+            # Professional Excel export section
+            st.markdown("---")
+            st.markdown("### 📊 Exportación de Datos")
+            
+            col_download1, col_download2 = st.columns([1, 2])
+            with col_download1:
+                if st.button("📈 Descargar Análisis Completo", help="Descarga el reporte completo de análisis de riesgos en formato Excel"):
+                    try:
+                        # Create comprehensive Excel report
+                        current_field = st.session_state.get("current_field", field_name)
+                        excel_buffer = create_ghg_analysis_excel(ghg_data, current_field)
+                        
+                        # Generate professional filename
+                        timestamp = pd.Timestamp.now().strftime("%Y%m%d_%H%M")
+                        field_suffix = f"_{current_field}" if current_field else ""
+                        filename = f"Analisis_Riesgos_GEI{field_suffix}_{timestamp}.xlsx"
+                        
+                        st.download_button(
+                            label="💾 Guardar Reporte Excel",
+                            data=excel_buffer,
+                            file_name=filename,
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            help="Descarga el análisis completo de riesgos y captura de GEI"
+                        )
+                        st.success("✅ Reporte Excel preparado para descarga")
+                        
+                    except Exception as e:
+                        print(f"🚨 ERROR: Exception in Excel generation: {type(e).__name__}: {e}")
+                        import traceback
+                        print(f"🚨 ERROR: Full traceback: {traceback.format_exc()}")
+                        st.error(f"Error generando reporte Excel: {e}")
+                        st.error(f"Tipo de error: {type(e).__name__}")
+                        st.error("Revisa la consola para más detalles del error")
+            
+            with col_download2:
+                st.info("""
+                **📋 Contenido del Reporte Excel:**
+                - 📊 **Resumen Ejecutivo** con métricas clave
+                - 📈 **Escenarios de Riesgo** detallados  
+                - 🎯 **Matriz de Impacto** (frecuencia vs severidad)
+                - 🛡️ **Matrices de Gestión** por estrategia
+                - 📉 **Análisis LDA** (distribución de pérdidas)
+                - 💰 **Análisis Financiero** y costo-beneficio
+                """)
         
         else:
             st.info("Haz clic en 'Procesar Datos de GEI' para analizar escenarios de captura de gases de efecto invernadero y gestión de riesgos.")

@@ -644,7 +644,7 @@ def create_3d_simulation_plot_sea_keypoints(
     wave_speed_range=(0.5, 2.0),
     influence_sigma=0.1,
     random_seed=42,
-    z_min=0,
+    z_min=-0.3,
     z_max=0.9
 ):
     try:
@@ -825,7 +825,7 @@ def create_3d_simulation_plot_time_interpolation(
         xi, yi = np.meshgrid(xi, yi)
 
         ndvi_grids = []
-        global_min = 0
+        global_min = 0.3
         global_max = 0.9
 
         for (xv, yv, zv) in flattened:
@@ -842,49 +842,13 @@ def create_3d_simulation_plot_time_interpolation(
         # Use custom NDVI colorscale to match 2D interactive plot
         custom_colorscale = get_custom_ndvi_colorscale()
         
-        # Create spheres and text for original data points
-        sphere_frames = []
-        for sheet_idx, (x_vals, y_vals, z_vals) in enumerate(flattened):
-            # Create spheres at original data points
-            sphere_trace = go.Scatter3d(
-                x=x_vals,
-                y=y_vals,
-                z=[z * z_scale + 0.02 for z in z_vals],  # Slight offset above surface
-                mode='markers+text',
-                marker=dict(
-                    size=6,
-                    color=z_vals,
-                    colorscale=custom_colorscale,
-                    cmin=global_min,
-                    cmax=global_max,
-                    opacity=0.9,
-                    line=dict(width=1, color='white')
-                ),
-                text=[f'{ndvi:.3f}' for ndvi in z_vals],
-                textposition="top center",
-                textfont=dict(size=8, color="white"),
-                hovertemplate='<b>NDVI:</b> %{marker.color:.3f}<br>' +
-                             '<b>Lon:</b> %{x:.6f}<br>' +
-                             '<b>Lat:</b> %{y:.6f}<extra></extra>',
-                name=f'Puntos NDVI - Hoja {sheet_idx + 1}',
-                showlegend=False
-            )
-            sphere_frames.append(sphere_trace)
-        
         for i in range(len(ndvi_grids) - 1):
             start_grid = ndvi_grids[i]
             end_grid = ndvi_grids[i + 1]
-            
-            # Get corresponding sphere data for interpolation
-            start_spheres = sphere_frames[i]
-            end_spheres = sphere_frames[i + 1] if i + 1 < len(sphere_frames) else sphere_frames[i]
-            
             for step in range(1, steps_between_sheets + 1):
                 alpha = step / float(steps_between_sheets)
                 ndvi_interp = (1 - alpha) * start_grid + alpha * end_grid
-                
-                # Create interpolated surface
-                fr_surface = go.Surface(
+                fr_data = go.Surface(
                     x=xi,
                     y=yi,
                     z=ndvi_interp,
@@ -892,75 +856,22 @@ def create_3d_simulation_plot_time_interpolation(
                     colorscale=custom_colorscale,
                     colorbar=dict(title='NDVI'),
                     cmin=global_min,
-                    cmax=global_max,
-                    showscale=True
+                    cmax=global_max
                 )
-                
-                # Interpolate sphere positions and colors for smooth animation
-                if i + 1 < len(sphere_frames):
-                    interp_x = [(1 - alpha) * start_spheres.x[j] + alpha * end_spheres.x[j] 
-                               for j in range(len(start_spheres.x))]
-                    interp_y = [(1 - alpha) * start_spheres.y[j] + alpha * end_spheres.y[j] 
-                               for j in range(len(start_spheres.y))]
-                    interp_z = [(1 - alpha) * start_spheres.z[j] + alpha * end_spheres.z[j] 
-                               for j in range(len(start_spheres.z))]
-                    interp_colors = [(1 - alpha) * start_spheres.marker.color[j] + alpha * end_spheres.marker.color[j] 
-                                   for j in range(len(start_spheres.marker.color))]
-                else:
-                    interp_x = list(start_spheres.x)
-                    interp_y = list(start_spheres.y)
-                    interp_z = list(start_spheres.z)
-                    interp_colors = list(start_spheres.marker.color)
-                
-                # Create interpolated spheres
-                fr_spheres = go.Scatter3d(
-                    x=interp_x,
-                    y=interp_y,
-                    z=interp_z,
-                    mode='markers+text',
-                    marker=dict(
-                        size=6,
-                        color=interp_colors,
-                        colorscale=custom_colorscale,
-                        cmin=global_min,
-                        cmax=global_max,
-                        opacity=0.9,
-                        line=dict(width=1, color='white')
-                    ),
-                    text=[f'{ndvi:.3f}' for ndvi in interp_colors],
-                    textposition="top center",
-                    textfont=dict(size=8, color="white"),
-                    hovertemplate='<b>NDVI:</b> %{marker.color:.3f}<br>' +
-                                 '<b>Lon:</b> %{x:.6f}<br>' +
-                                 '<b>Lat:</b> %{y:.6f}<extra></extra>',
-                    name='Puntos NDVI',
-                    showlegend=False
-                )
-                
-                frames.append(go.Frame(data=[fr_surface, fr_spheres], name=f"frame_{i}_{step}"))
+                frames.append(go.Frame(data=[fr_data], name=f"frame_{i}_{step}"))
 
         # ✅ Fixed: White Axis Labels & Tick Labels
-        # Create initial surface
-        initial_surface = go.Surface(
-            x=xi,
-            y=yi,
-            z=ndvi_first,
-            surfacecolor=ndvi_first,
-            colorscale=custom_colorscale,
-            colorbar=dict(title='NDVI'),
-            cmin=global_min,
-            cmax=global_max
-        )
-        
-        # Create initial spheres for first data sheet
-        if sphere_frames:
-            initial_spheres = sphere_frames[0]
-        else:
-            # Fallback if no sphere frames
-            initial_spheres = go.Scatter3d(x=[], y=[], z=[], mode='markers')
-        
         fig = go.Figure(
-            data=[initial_surface, initial_spheres],
+            data=[go.Surface(
+                x=xi,
+                y=yi,
+                z=ndvi_first,
+                surfacecolor=ndvi_first,
+                colorscale=custom_colorscale,
+                colorbar=dict(title='NDVI'),
+                cmin=global_min,
+                cmax=global_max
+            )],
             frames=frames
         )
 
