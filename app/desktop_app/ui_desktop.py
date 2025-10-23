@@ -1574,7 +1574,24 @@ def render_ui() -> None:
             
             # Management results table
             st.subheader("Escenarios de Gestión de Riesgos")
-            st.dataframe(ghg_data["results"])
+            
+            # Create tabs for USD and COP display
+            tab1, tab2 = st.tabs(["💰 Valores en COP", "💵 Valores en USD"])
+            
+            with tab1:
+                st.markdown("**Tabla en Pesos Colombianos (COP)**")
+                if "results_cop" in ghg_data:
+                    st.dataframe(ghg_data["results_cop"])
+                else:
+                    # Fallback if COP version not available
+                    st.dataframe(ghg_data["results"])
+                    st.info("💡 Conversión COP no disponible. Mostrando valores en USD.")
+            
+            with tab2:
+                st.markdown("**Tabla en Dólares Americanos (USD)**")
+                st.dataframe(ghg_data["results"])
+                if "usd_cop_rate" in ghg_data:
+                    st.caption(f"💱 Tasa de cambio: 1 USD = {ghg_data['usd_cop_rate']:,.0f} COP")
             
             # Combined matrices section: Impact matrix and Management matrices
             st.subheader("Matrices de Gestión")
@@ -1608,68 +1625,172 @@ def render_ui() -> None:
             
             # Cost-benefit analysis
             st.subheader("Análisis Costo-Beneficio")
-            fig_cost_benefit = create_cost_benefit_chart(ghg_data["results"])
-            st.plotly_chart(fig_cost_benefit, use_container_width=True)
+            
+            # Create tabs for USD and COP cost-benefit analysis
+            cb_tab1, cb_tab2 = st.tabs(["💰 Análisis en COP", "💵 Análisis en USD"])
+            
+            with cb_tab1:
+                st.markdown("**Análisis Costo-Beneficio en Pesos Colombianos (COP)**")
+                if "results_cop" in ghg_data:
+                    fig_cost_benefit_cop = create_cost_benefit_chart(ghg_data["results_cop"])
+                    st.plotly_chart(fig_cost_benefit_cop, use_container_width=True)
+                else:
+                    st.info("💡 Análisis COP no disponible. Ver pestaña USD.")
+            
+            with cb_tab2:
+                st.markdown("**Análisis Costo-Beneficio en Dólares Americanos (USD)**")
+                fig_cost_benefit_usd = create_cost_benefit_chart(ghg_data["results"])
+                st.plotly_chart(fig_cost_benefit_usd, use_container_width=True)
             
             # LDA distribution plot
             st.subheader("Análisis de Distribución de Pérdidas (LDA)")
-            fig_lda = create_lda_distribution_plot(
-                ghg_data["lda_data"],
-                ghg_data["mgr_labels"],
-                ghg_data.get("visualization_lines")  # Add the new reference lines parameter
-            )
-            st.plotly_chart(fig_lda, use_container_width=True)
+            
+            # Create tabs for USD and COP LDA plots
+            lda_tab1, lda_tab2 = st.tabs(["💰 Distribución en COP", "💵 Distribución en USD"])
+            
+            with lda_tab1:
+                st.markdown("**Distribución de Pérdidas en Pesos Colombianos (COP)**")
+                fig_lda_cop = create_lda_distribution_plot(
+                    ghg_data["lda_data"],
+                    ghg_data["mgr_labels"],
+                    ghg_data.get("visualization_lines"),
+                    currency="COP",
+                    usd_cop_rate=ghg_data.get("usd_cop_rate", 1)
+                )
+                st.plotly_chart(fig_lda_cop, use_container_width=True)
+            
+            with lda_tab2:
+                st.markdown("**Distribución de Pérdidas en Dólares Americanos (USD)**")
+                fig_lda_usd = create_lda_distribution_plot(
+                    ghg_data["lda_data"],
+                    ghg_data["mgr_labels"],
+                    ghg_data.get("visualization_lines"),
+                    currency="USD"
+                )
+                st.plotly_chart(fig_lda_usd, use_container_width=True)
         
             # Comprehensive metrics dashboard
             st.subheader("Resumen de Métricas de Riesgo")
             
-            # Basic risk metrics
-            st.markdown("### Métricas Básicas de Riesgo")
-            metrics_cols = st.columns(4)
+            # Create tabs for USD and COP metrics
+            metrics_tab1, metrics_tab2 = st.tabs(["💰 Métricas en COP", "💵 Métricas en USD"])
             
-            with metrics_cols[0]:
-                baseline_loss = ghg_data["results"].loc["Baseline", "Media (USD)"]
-                st.metric("Pérdida Base", f"${baseline_loss:,.0f}")
-            
-            with metrics_cols[1]:
-                best_scenario = ghg_data["results"]["Media (USD)"].idxmin()
-                best_loss = ghg_data["results"].loc[best_scenario, "Media (USD)"]
-                reduction = ((baseline_loss - best_loss) / baseline_loss) * 100
-                st.metric("Mejor Escenario", best_scenario, f"-{reduction:.1f}%")
-            
-            with metrics_cols[2]:
-                max_vc = ghg_data["results"]["VCap. (USD)"].max()  # Updated column name
-                st.metric("Máximo Valor Capturado", f"${max_vc:,.0f}")
-            
-            with metrics_cols[3]:
-                total_events = ghg_data["results"]["NE"].iloc[0]
-                st.metric("Total Eventos de Riesgo", f"{total_events:,}")
+            with metrics_tab1:
+                st.markdown("**Métricas de Riesgo en Pesos Colombianos (COP)**")
+                
+                # Check if COP data is available
+                if "results_cop" in ghg_data:
+                    results_data = ghg_data["results_cop"]
+                    currency_symbol = ""
+                    currency_format = "{:,.0f} COP"
+                    
+                    # Get COP conversion rate for visualization lines
+                    usd_cop_rate = ghg_data.get("usd_cop_rate", 1)
+                    
+                    # Basic risk metrics
+                    st.markdown("### Métricas Básicas de Riesgo")
+                    metrics_cols = st.columns(4)
+                    
+                    with metrics_cols[0]:
+                        baseline_loss = results_data.loc["Baseline", "Media (COP)"]
+                        st.metric("Pérdida Base", currency_format.format(baseline_loss))
+                    
+                    with metrics_cols[1]:
+                        best_scenario = results_data["Media (COP)"].idxmin()
+                        best_loss = results_data.loc[best_scenario, "Media (COP)"]
+                        reduction = ((baseline_loss - best_loss) / baseline_loss) * 100
+                        st.metric("Mejor Escenario", best_scenario, f"-{reduction:.1f}%")
+                    
+                    with metrics_cols[2]:
+                        max_vc = results_data["VCap. (COP)"].max()
+                        st.metric("Máximo Valor Capturado", currency_format.format(max_vc))
+                    
+                    with metrics_cols[3]:
+                        total_events = results_data["NE"].iloc[0]
+                        st.metric("Total Eventos de Riesgo", f"{total_events:,}")
 
-            # Advanced risk analysis
-            st.markdown("### Análisis Avanzado de Riesgo")
-            enhanced_cols = st.columns(4)
+                    # Advanced risk analysis
+                    st.markdown("### Análisis Avanzado de Riesgo")
+                    enhanced_cols = st.columns(4)
+                    
+                    with enhanced_cols[0]:
+                        # CO2 Capture metrics
+                        max_co2 = results_data["TCO2(Ton.)"].max()
+                        st.metric("Máxima Captura CO2", f"{max_co2:.3f} toneladas")
+                    
+                    with enhanced_cols[1]:
+                        # Skewness analysis
+                        baseline_skew = results_data.loc["Baseline", "C.As."]
+                        st.metric("Asimetría Base", f"{baseline_skew:.4f}")
+                    
+                    with enhanced_cols[2]:
+                        # Operational Income
+                        max_op_income = results_data["IngOp.(COP)"].max()
+                        st.metric("Máximo Ingreso Op.", currency_format.format(max_op_income))
+                    
+                    with enhanced_cols[3]:
+                        # Reference lines info
+                        if "visualization_lines" in ghg_data:
+                            media_improvement = ((ghg_data["visualization_lines"]["media_val_o"] - 
+                                               ghg_data["visualization_lines"]["media_val_g"]) * usd_cop_rate)
+                            st.metric("Reducción de Riesgo", currency_format.format(media_improvement))
+                        
+                else:
+                    st.info("💡 Métricas COP no disponibles. Ver pestaña USD.")
             
-            with enhanced_cols[0]:
-                # CO2 Capture metrics
-                max_co2 = ghg_data["results"]["TCO2(Ton.)"].max()
-                st.metric("Máxima Captura CO2", f"{max_co2:.3f} toneladas")
-            
-            with enhanced_cols[1]:
-                # Skewness analysis
-                baseline_skew = ghg_data["results"].loc["Baseline", "C.As."]
-                st.metric("Asimetría Base", f"{baseline_skew:.4f}")
-            
-            with enhanced_cols[2]:
-                # Operational Income
-                max_op_income = ghg_data["results"]["IngOp.(USD)"].max()
-                st.metric("Máximo Ingreso Op.", f"${max_op_income:,.0f}")
-            
-            with enhanced_cols[3]:
-                # Reference lines info
-                if "visualization_lines" in ghg_data:
-                    media_improvement = (ghg_data["visualization_lines"]["media_val_o"] - 
-                                       ghg_data["visualization_lines"]["media_val_g"])
-                    st.metric("Reducción de Riesgo", f"${media_improvement:,.0f}")
+            with metrics_tab2:
+                st.markdown("**Métricas de Riesgo en Dólares Americanos (USD)**")
+                
+                results_data = ghg_data["results"]
+                currency_format = "${:,.0f}"
+                
+                # Basic risk metrics
+                st.markdown("### Métricas Básicas de Riesgo")
+                metrics_cols = st.columns(4)
+                
+                with metrics_cols[0]:
+                    baseline_loss = results_data.loc["Baseline", "Media (USD)"]
+                    st.metric("Pérdida Base", currency_format.format(baseline_loss))
+                
+                with metrics_cols[1]:
+                    best_scenario = results_data["Media (USD)"].idxmin()
+                    best_loss = results_data.loc[best_scenario, "Media (USD)"]
+                    reduction = ((baseline_loss - best_loss) / baseline_loss) * 100
+                    st.metric("Mejor Escenario", best_scenario, f"-{reduction:.1f}%")
+                
+                with metrics_cols[2]:
+                    max_vc = results_data["VCap. (USD)"].max()
+                    st.metric("Máximo Valor Capturado", currency_format.format(max_vc))
+                
+                with metrics_cols[3]:
+                    total_events = results_data["NE"].iloc[0]
+                    st.metric("Total Eventos de Riesgo", f"{total_events:,}")
+
+                # Advanced risk analysis
+                st.markdown("### Análisis Avanzado de Riesgo")
+                enhanced_cols = st.columns(4)
+                
+                with enhanced_cols[0]:
+                    # CO2 Capture metrics
+                    max_co2 = results_data["TCO2(Ton.)"].max()
+                    st.metric("Máxima Captura CO2", f"{max_co2:.3f} toneladas")
+                
+                with enhanced_cols[1]:
+                    # Skewness analysis
+                    baseline_skew = results_data.loc["Baseline", "C.As."]
+                    st.metric("Asimetría Base", f"{baseline_skew:.4f}")
+                
+                with enhanced_cols[2]:
+                    # Operational Income
+                    max_op_income = results_data["IngOp.(USD)"].max()
+                    st.metric("Máximo Ingreso Op.", currency_format.format(max_op_income))
+                
+                with enhanced_cols[3]:
+                    # Reference lines info
+                    if "visualization_lines" in ghg_data:
+                        media_improvement = (ghg_data["visualization_lines"]["media_val_o"] - 
+                                           ghg_data["visualization_lines"]["media_val_g"])
+                        st.metric("Reducción de Riesgo", currency_format.format(media_improvement))
             
             # Professional Excel export section
             st.markdown("---")

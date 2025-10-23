@@ -3,7 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.cluster import KMeans
-from scipy.stats import skew
+from scipy.stats import skew, gaussian_kde
 import os
 import random
 import streamlit as st
@@ -357,6 +357,23 @@ def process_ghg_data(indice, anio, base_folder="./upload_data", field_name=None)
         # Get exchange rate
         usd_cop_rate = get_usd_cop_rate()
         
+        # Create COP version of results dataframe
+        df_results_cop = df_results.copy()
+        
+        # List of USD columns to convert
+        usd_columns = ['Media (USD)', 'PNE (USD)', 'OpVar (USD)', 'CG (USD)', 'CP (USD)', 'VCap. (USD)', 'CGT (USD)', 'Ing. (USD)', 'IngOp.(USD)']
+        
+        # Convert USD columns to COP
+        for col in usd_columns:
+            if col in df_results_cop.columns:
+                cop_col_name = col.replace('(USD)', '(COP)')
+                df_results_cop[cop_col_name] = (df_results_cop[col] * usd_cop_rate).round(0).astype(int)
+                # Remove the original USD column from COP version
+                df_results_cop = df_results_cop.drop(columns=[col])
+        
+        # Rename columns to show COP currency
+        df_results_cop = df_results_cop.round(0)
+        
         # Create cluster info dataframe with COP conversion
         df_clusters = pd.DataFrame(np.vstack((
             lbf, 
@@ -389,6 +406,7 @@ def process_ghg_data(indice, anio, base_folder="./upload_data", field_name=None)
             'impact_matrix': MI,
             'management_matrices': management_matrices,
             'results': df_results,
+            'results_cop': df_results_cop,  # Add COP version
             'lda_data': LDAT,  # Already properly formatted
             'mgr_labels': MGR,
             'frequency_labels': lbf,
@@ -440,8 +458,8 @@ def create_risk_matrix_heatmap(matrix, title, freq_labels, sev_labels):
     return fig
 
 
-def create_lda_distribution_plot(lda_data, mgr_labels, visualization_lines=None):
-    """Create LDA distribution plot matching Jupyter notebook style with reference lines"""
+def create_lda_distribution_plot(lda_data, mgr_labels, visualization_lines=None, currency="USD", usd_cop_rate=1):
+    """Create LDA distribution plot matching Jupyter notebook style with reference lines and smooth curves"""
     fig = go.Figure()
     
     colors = ['red', 'orange', 'yellow', 'blue', 'green']
@@ -450,19 +468,77 @@ def create_lda_distribution_plot(lda_data, mgr_labels, visualization_lines=None)
     if lda_data.ndim == 1:
         lda_data = lda_data.reshape(-1, 1)
     
+    # Convert data to COP if requested
+    if currency == "COP" and usd_cop_rate > 1:
+        lda_data = lda_data * usd_cop_rate
+        # Also convert visualization lines if provided
+        if visualization_lines:
+            visualization_lines = {
+                'media_val_o': visualization_lines['media_val_o'] * usd_cop_rate,
+                'opvar_val_o': visualization_lines['opvar_val_o'] * usd_cop_rate,
+                'media_val_g': visualization_lines['media_val_g'] * usd_cop_rate,
+                'opvar_val_g': visualization_lines['opvar_val_g'] * usd_cop_rate
+            }
+    
+    # Calculate overall range for smooth curves
+    all_data = lda_data.flatten()
+    x_range = np.linspace(np.min(all_data), np.max(all_data), 200)
+    
     for i in range(min(lda_data.shape[1], len(mgr_labels))):
         data = lda_data[:, i]
         label = mgr_labels[i]
         color = colors[i % len(colors)]
         
+        # Add histogram
         fig.add_trace(go.Histogram(
             x=data,
-            name=label,
-            opacity=0.7,
+            name=f"{label} (Histogram)",
+            opacity=0.6,
             marker_color=color,
             histnorm='probability density',
-            nbinsx=50
+            nbinsx=50,
+            showlegend=True
         ))
+        
+        # Add smooth curve using KDE (Kernel Density Estimation)
+        '''
+        try:
+            if len(data) > 1 and np.std(data) > 0:  # Ensure we have valid data for KDE
+                kde = gaussian_kde(data)
+                curve_y = kde(x_range)
+                
+                fig.add_trace(go.Scatter(
+                    x=x_range,
+                    y=curve_y,
+                    mode='lines',
+                    name=f"{label} (Curve)",
+                    line=dict(color=color, width=3, dash='solid'),
+                    opacity=0.9,
+                    showlegend=True
+                ))
+        except Exception:
+            # If KDE fails, skip the curve for this dataset
+            pass
+        '''
+    
+    # Add overall average curve (combining all scenarios)
+    try:
+        if len(all_data) > 1 and np.std(all_data) > 0:
+            kde_avg = gaussian_kde(all_data)
+            curve_avg_y = kde_avg(x_range)
+            
+            fig.add_trace(go.Scatter(
+                x=x_range,
+                y=curve_avg_y,
+                mode='lines',
+                name="Average Curve",
+                line=dict(color='white', width=4, dash='dash'),
+                opacity=1.0,
+                showlegend=True
+            ))
+    except Exception:
+        # If overall KDE fails, skip the average curve
+        pass
     
     # Add vertical reference lines if provided
     if visualization_lines:
@@ -483,12 +559,21 @@ def create_lda_distribution_plot(lda_data, mgr_labels, visualization_lines=None)
                      annotation_text="OpVar_G")
     
     fig.update_layout(
-        title="Risk Profile (LDA)",
-        xaxis_title="USD",
-        yaxis_title="Density",
+        title=f"Risk Profile (LDA) - Distribution with Smooth Curves ({currency})",
+        xaxis_title=currency,
+        yaxis_title="Probability Density",
         barmode='overlay',
-        height=500,
-        showlegend=True
+        height=600,  # Slightly taller to accommodate curves
+        showlegend=True,
+        legend=dict(
+            orientation="v",
+            yanchor="top",
+            y=0.99,
+            xanchor="right",
+            x=0.99,
+            bgcolor="rgba(255,255,255,0.8)"
+        ),
+        hovermode='x unified'
     )
     
     return fig
@@ -516,27 +601,40 @@ def create_management_matrix_heatmap(matrix, title, freq_labels, sev_labels):
     return fig
 
 def create_cost_benefit_chart(results_df):
-    """Create cost-benefit analysis chart"""
+    """Create cost-benefit analysis chart - works with both USD and COP DataFrames"""
     fig = go.Figure()
     
+    # Determine currency based on column names
+    currency = "COP" if any("(COP)" in col for col in results_df.columns) else "USD"
+    
+    # Get column names based on currency
+    if currency == "COP":
+        cg_col = 'CG (COP)'
+        vcap_col = 'VCap. (COP)'
+        media_col = 'Media (COP)'
+    else:
+        cg_col = 'CG (USD)'
+        vcap_col = 'VCap. (USD)'
+        media_col = 'Media (USD)'
+    
     fig.add_trace(go.Scatter(
-        x=results_df['CG (USD)'],
-        y=results_df['VCap. (USD)'],  # Updated to match new column name
+        x=results_df[cg_col],
+        y=results_df[vcap_col],  # Updated to match new column name
         mode='markers+text',
         text=results_df.index,
         textposition="top center",
         marker=dict(
             size=12,
-            color=results_df['Media (USD)'],
+            color=results_df[media_col],
             colorscale='RdYlGn_r',
             showscale=True
         )
     ))
     
     fig.update_layout(
-        title="Cost-Benefit Analysis",
-        xaxis_title="Management Cost (USD)",
-        yaxis_title="Value Captured (USD)",
+        title=f"Cost-Benefit Analysis ({currency})",
+        xaxis_title=f"Management Cost ({currency})",
+        yaxis_title=f"Value Captured ({currency})",
         height=500
     )
     
