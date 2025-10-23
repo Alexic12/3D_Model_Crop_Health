@@ -423,7 +423,10 @@ def create_risk_matrix_heatmap(matrix, title, freq_labels, sev_labels):
         y=freq_labels[:, ::-1].flatten(),
         colorscale='RdYlBu_r',
         showscale=True,
-        hoverongaps=False
+        hoverongaps=False,
+        text=matrix[::-1],  # Show numeric values on the matrix
+        texttemplate="%{text:.1f}",  # Format numbers to 1 decimal place
+        textfont={"size": 10}  # Set text size for readability
     ))
     
     fig.update_layout(

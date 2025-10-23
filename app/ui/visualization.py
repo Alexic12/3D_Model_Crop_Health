@@ -370,7 +370,7 @@ def create_2d_scatter_plot_ndvi_interactive_qgis(
 
         ax.set_xlabel("Longitud", fontsize=12, fontweight='bold', color='white')  
         ax.set_ylabel("Latitud", fontsize=12, fontweight='bold', color='white')
-        ax.set_title(f"NDVI Interactivo - {sheet_name}", fontsize=14, fontweight='bold', color='white')
+        ax.set_title(f"NDVI Interactivo - {sheet_name}", fontsize=20, fontweight='bold', color='white')
 
         for label in ax.get_xticklabels(): label.set_color('white')
         for label in ax.get_yticklabels(): label.set_color('white')
