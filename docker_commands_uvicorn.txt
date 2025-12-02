@@ -1,0 +1,124 @@
+# Step 1: Build the Docker image from docker-compose
+docker compose build
+
+# Step 2: Confirm the image is built and get its name
+docker images
+
+# (Assume image name is "3dmodelcrophealth", tag is "latest")
+
+# Step 3: Save the Docker image to a tarball archive
+docker save -o 3dmodelcrophealth.tar 3dmodelcrophealth:latest
+
+# Step 4: Move the image file to your Desktop (Windows)
+move 3dmodelcrophealth.tar %USERPROFILE%\Desktop\
+
+2 Dockerfile & entrypoint for “all-in-one”
+Make sure your image starts three processes (Uvicorn + two Streamlit apps).
+
+Dockerfile
+
+dockerfile
+Copiar
+Editar
+FROM python:3.11-slim
+
+WORKDIR /app
+COPY . /app
+
+# Install dependencies
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Expose all three ports
+EXPOSE 8000 8501 8502
+
+# Copy runner
+COPY docker/run-all.sh /usr/local/bin/run-all.sh
+RUN chmod +x /usr/local/bin/run-all.sh
+
+# Entrypoint runs all services
+ENTRYPOINT ["/usr/local/bin/run-all.sh"]
+docker/run-all.sh
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+trap 'kill -TERM $(jobs -p) 2>/dev/null || true' TERM INT
+
+# API on 8000
+uvicorn app.api.main:app --host 0.0.0.0 --port 8000 &
+
+# Streamlit UI 1 on 8501
+streamlit run app/ui/main.py --server.port=8501 --server.address=0.0.0.0 &
+
+# Streamlit UI 2 on 8502
+streamlit run app/ui2/main.py --server.port=8502 --server.address=0.0.0.0 &
+
+# If any dies, exit so ECS replaces the task
+wait -n
+exit $?
+
+
+Rebuild the image after adding these files:
+docker compose build
+
+3 Fargate task definition (single container, 3 ports)
+Increased CPU/Memory to handle 3 processes. Adjust as needed.
+
+#### for fargate commands
+
+# Step 1: Create new task definition JSON file
+cat > streamlit-task.json <<EOF
+{
+  "family": "streamlit-task",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "executionRoleArn": "arn:aws:iam::147997127433:role/ecsTaskExecutionRole",
+  "containerDefinitions": [
+    {
+      "name": "streamlit-app",
+      "image": "147997127433.dkr.ecr.us-east-1.amazonaws.com/agrorisk:latest",
+      "essential": true,
+      "portMappings": [
+        { "containerPort": 8000, "protocol": "tcp" },
+        { "containerPort": 8501, "protocol": "tcp" },
+        { "containerPort": 8502, "protocol": "tcp" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/streamlit-task",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ecs"
+        }
+      }
+    }
+  ]
+}
+EOF
+
+# Step 2: Register new task definition
+aws ecs register-task-definition --cli-input-json file://streamlit-task.json
+
+# Step 3: Get the latest revision number (optional but recommended)
+aws ecs describe-task-definition --task-definition streamlit-task --query "taskDefinition.revision"
+
+# Step 4: Update ECS service to use the latest revision and force new deployment
+aws ecs update-service \
+  --cluster streamlit-cluster \
+  --service streamlit-task-service-uu9sz6hc \
+  --task-definition streamlit-task \
+  --force-new-deployment
+
+
+RUN ON CMD CONSOLE DOCKER FOR ecsTaskExecutionRole
+# Option 1: Pass environment variable directly
+docker run -d --name agrorisk-all -p 8000:8000 -p 8501:8501 -p 8502:8502 --restart unless-stopped -e GOOGLE_MAPS_API_KEY=AIzaSyB1Vv2XMsTy1AxEowrzOaI5Sn96ffC6HNY agrorisk:latest
+
+# Option 2: Use .env file (recommended)
+docker run -d --name agrorisk-all -p 8000:8000 -p 8501:8501 -p 8502:8502 --restart unless-stopped --env-file .env agrorisk:latest
+
+#Option 3: load without env variable
+
+docker run -d --name agrorisk-all -p 8000:8000 -p 8501:8501 -p 8502:8502 --restart unless-stopped agrorisk:latest

@@ -1,0 +1,12 @@
+# Authenticate Docker to ECR
+aws ecr get-login-password --region us-east-1 | docker login --username AWS --password-stdin 147997127433.dkr.ecr.us-east-1.amazonaws.com
+
+# Etiquetar la imagen 'agrorisk:latest' como 'streamlit-app:latest'
+docker tag agrorisk:latest 147997127433.dkr.ecr.us-east-1.amazonaws.com/streamlit-app:latest
+
+# Subir imagen etiquetada a ECR repositorio 'streamlit-app'
+docker push 147997127433.dkr.ecr.us-east-1.amazonaws.com/streamlit-app:latest
+
+##register task definition
+# Registrar definición de tarea ECS con nueva imagen
+aws ecs register-task-definition --cli-input-json file://streamlit-task.json
