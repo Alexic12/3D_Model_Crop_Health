@@ -461,14 +461,15 @@ def render_mobile() -> None:
         ndvi_color = cmap(row["NDVI"])
         point_num = point_idx + 1
         
+        # Create larger, translucent circle with point number
         folium.CircleMarker(
             location=[row["long-ym"], row["long-xm"]],
-            radius=8,  # Slightly larger for better visibility on satellite
+            radius=15,  # Bigger circle for better visibility
             color='white',  # White border for contrast against satellite imagery
             weight=2,  # Border thickness
             fill=True, 
             fillColor=ndvi_color,
-            fillOpacity=0.8,
+            fillOpacity=0.3,  # 70% translucent (0.3 = 30% opacity)
             popup=folium.Popup(
                 f"<b>Punto {point_num}</b><br>"
                 f"NDVI: {row['NDVI']:.3f}<br>"
@@ -477,6 +478,32 @@ def render_mobile() -> None:
                 max_width=200
             ),
             tooltip=f"Punto {point_num} - NDVI: {row['NDVI']:.3f}"
+        ).add_to(m)
+        
+        # Add point number as white text inside the circle
+        folium.Marker(
+            location=[row["long-ym"], row["long-xm"]],
+            icon=folium.DivIcon(
+                html=f"""
+                <div style="
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    width: 30px;
+                    height: 30px;
+                    color: white;
+                    font-weight: bold;
+                    font-size: 12px;
+                    text-shadow: 1px 1px 2px black;
+                    pointer-events: none;
+                ">
+                    {point_num}
+                </div>
+                """,
+                icon_size=(30, 30),
+                icon_anchor=(15, 15),
+                class_name="point-number"
+            )
         ).add_to(m)
 
     map_data = st_folium(m, width=None, height=500, returned_objects=["last_clicked"])
