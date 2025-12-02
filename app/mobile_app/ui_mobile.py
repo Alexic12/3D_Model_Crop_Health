@@ -270,6 +270,21 @@ def render_mobile() -> None:
     # --- user inputs -----------------------------------------------------
     indice = st.text_input("Índice de Vegetación", value="NDVI")
     anio   = st.text_input("Año", value="2024")
+    
+    # Satellite imagery selection
+    satellite_option = st.selectbox(
+        "Tipo de Imagen Satelital",
+        [
+            "Google Satellite", 
+            "Google Hybrid", 
+            "Esri Satellite", 
+            "USGS Satellite",
+            "Street Map"
+        ],
+        index=0,  # Default to Google Satellite
+        key="satellite_selector",
+        help="Selecciona el tipo de imagen de fondo para el mapa. Google Hybrid incluye etiquetas sobre la imagen satelital."
+    )
 
     # Clear success messages when field or sheet changes
     current_context = f"{field_name}_{indice}_{anio}"
@@ -291,6 +306,14 @@ def render_mobile() -> None:
     else:
         qgis_path = ASSETS_DIR / f"INFORME_{indice}_QGIS_{anio}.xlsx"
         manual_fn = ASSETS_DIR / "Data_Riesgo_MANUAL.xlsx"
+    
+    # Display satellite imagery information
+    if satellite_option in ["Google Satellite", "Google Hybrid"]:
+        st.info("🛰️ **Google Satellite**: Imágenes de alta resolución, actualizadas frecuentemente. Ideal para análisis detallado de cultivos.")
+    elif satellite_option == "Esri Satellite":
+        st.info("🛰️ **Esri Satellite**: Imágenes de múltiples fuentes, buena cobertura global. Excelente para análisis agrícola.")
+    elif satellite_option == "USGS Satellite":
+        st.info("🛰️ **USGS Satellite**: Imágenes oficiales del gobierno de EE.UU., muy precisas para análisis científico.")
     
     st.markdown("---")
 
@@ -339,23 +362,148 @@ def render_mobile() -> None:
         st.error("No hay datos válidos de coordenadas / NDVI.")
         return
 
-    # --- folium map ------------------------------------------------------
+    # --- folium map with satellite imagery --------------------------------
+    # Define satellite tile configurations
+    satellite_configs = {
+        "Google Satellite": {
+            "tiles": 'https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}',
+            "attr": 'Google Satellite',
+            "name": 'Google Satellite'
+        },
+        "Google Hybrid": {
+            "tiles": 'https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}',
+            "attr": 'Google Hybrid (Satellite + Labels)',
+            "name": 'Google Hybrid'
+        },
+        "Esri Satellite": {
+            "tiles": 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+            "attr": 'Esri World Imagery',
+            "name": 'Esri Satellite'
+        },
+        "USGS Satellite": {
+            "tiles": 'https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}',
+            "attr": 'USGS National Map',
+            "name": 'USGS Satellite'
+        },
+        "Street Map": {
+            "tiles": 'OpenStreetMap',
+            "attr": 'OpenStreetMap',
+            "name": 'Street Map'
+        }
+    }
+    
+    # Create map with selected satellite imagery
+    selected_config = satellite_configs[satellite_option]
     m = folium.Map(
         location=[df["long-ym"].mean(), df["long-xm"].mean()],
-        zoom_start=17, control_scale=True
+        zoom_start=17, 
+        control_scale=True,
+        tiles=selected_config["tiles"],
+        attr=selected_config["attr"]
     )
-    cmap = cm.LinearColormap(["blue", "green", "yellow", "red"], vmin=-1, vmax=1, caption="NDVI")
+    
+    # Add all layers with layer control for switching
+    for name, config in satellite_configs.items():
+        if name != satellite_option:  # Don't add the currently selected one again
+            folium.TileLayer(
+                tiles=config["tiles"],
+                attr=config["attr"],
+                name=config["name"],
+                overlay=False,
+                control=True
+            ).add_to(m)
+    
+    # Add layer control to switch between different satellite providers
+    folium.LayerControl(position='topright', collapsed=True).add_to(m)
+    
+    # Add fullscreen button for mobile users
+    from folium.plugins import Fullscreen
+    Fullscreen(
+        position='topleft',
+        title='Pantalla Completa',
+        title_cancel='Salir Pantalla Completa',
+        force_separate_button=True
+    ).add_to(m)
+    
+    # Add locate control for mobile GPS
+    from folium.plugins import LocateControl
+    LocateControl(auto_start=False, position='topleft').add_to(m)
+    
+    # Enhanced NDVI colormap with better visibility on satellite imagery
+    cmap = cm.LinearColormap(
+        colors=["#0000FF", "#00FF00", "#FFFF00", "#FF0000"], 
+        vmin=-1, vmax=1, 
+        caption="NDVI (Índice de Vegetación)"
+    )
     cmap.add_to(m)
+    
+    # Add custom legend HTML for better visibility
+    legend_html = '''
+    <div style="position: fixed; 
+                bottom: 50px; left: 50px; width: 200px; height: 120px; 
+                background-color: white; border:2px solid grey; z-index:9999; 
+                font-size:12px; padding: 8px; border-radius: 5px;
+                box-shadow: 0 0 15px rgba(0,0,0,0.2);
+                ">
+    <p style="margin: 0; font-weight: bold; font-size: 13px;">Leyenda NDVI:</p>
+    <p style="margin: 2px 0;"><i style="background:#FF0000;width:10px;height:10px;display:inline-block;margin-right:5px;border-radius:50%;"></i> > 0.5 (Vegetación Densa)</p>
+    <p style="margin: 2px 0;"><i style="background:#FFFF00;width:10px;height:10px;display:inline-block;margin-right:5px;border-radius:50%;"></i> 0.0 - 0.5 (Vegetación Moderada)</p>
+    <p style="margin: 2px 0;"><i style="background:#00FF00;width:10px;height:10px;display:inline-block;margin-right:5px;border-radius:50%;"></i> -0.5 - 0.0 (Vegetación Escasa)</p>
+    <p style="margin: 2px 0;"><i style="background:#0000FF;width:10px;height:10px;display:inline-block;margin-right:5px;border-radius:50%;"></i> < -0.5 (Sin Vegetación/Agua)</p>
+    </div>
+    '''
+    
+    # Add the legend to the map using proper folium API
+    folium.Element(legend_html).add_to(m)
 
-    for _, row in df.iterrows():
+    # Enhanced markers for better visibility on satellite imagery
+    for point_idx, (idx, row) in enumerate(df.iterrows()):
+        ndvi_color = cmap(row["NDVI"])
+        point_num = point_idx + 1
+        
         folium.CircleMarker(
             location=[row["long-ym"], row["long-xm"]],
-            radius=6,
-            color=cmap(row["NDVI"]),
-            fill=True, fill_color=cmap(row["NDVI"]), fill_opacity=0.85,
+            radius=8,  # Slightly larger for better visibility on satellite
+            color='white',  # White border for contrast against satellite imagery
+            weight=2,  # Border thickness
+            fill=True, 
+            fillColor=ndvi_color,
+            fillOpacity=0.8,
+            popup=folium.Popup(
+                f"<b>Punto {point_num}</b><br>"
+                f"NDVI: {row['NDVI']:.3f}<br>"
+                f"Lat: {row['long-ym']:.6f}<br>"
+                f"Lon: {row['long-xm']:.6f}",
+                max_width=200
+            ),
+            tooltip=f"Punto {point_num} - NDVI: {row['NDVI']:.3f}"
         ).add_to(m)
 
-    map_data = st_folium(m, width="100%", height=500, returned_objects=["last_clicked"])
+    map_data = st_folium(m, width=None, height=500, returned_objects=["last_clicked"])
+    
+    # Add helpful information about satellite imagery usage
+    with st.expander("ℹ️ Información sobre Imágenes Satelitales", expanded=False):
+        st.markdown("""
+        **🛰️ Consejos para usar imágenes satelitales:**
+        
+        - **Google Satellite**: Mejor resolución para análisis detallado de cultivos
+        - **Google Hybrid**: Incluye nombres de lugares y carreteras sobre la imagen
+        - **Esri Satellite**: Buena alternativa con diferentes perspectivas temporales
+        - **USGS Satellite**: Imágenes oficiales, ideales para investigación científica
+        
+        **📱 Controles del mapa:**
+        - 🔍 **Zoom**: Pellizca para hacer zoom o usa los botones +/-
+        - 📍 **GPS**: Presiona el botón de ubicación para centrar en tu posición
+        - 🖼️ **Pantalla completa**: Usa el botón para ver el mapa a pantalla completa
+        - 🗂️ **Capas**: Cambia entre diferentes tipos de imagen usando el control de capas
+        
+        **🌱 Interpretación NDVI:**
+        - **Rojo**: Vegetación muy densa y saludable
+        - **Amarillo**: Vegetación moderada
+        - **Verde**: Vegetación escasa o estresada
+        - **Azul**: Suelo desnudo, agua o sin vegetación
+        """)
+    
     # cosmetic gap reduction
     st.markdown(
         """<style>.element-container:has(> iframe)+div{margin-top:-2rem!important;}</style>""",
