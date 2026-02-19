@@ -841,22 +841,74 @@ def create_3d_simulation_plot_sea_keypoints(
         return None
 
 
+def _parse_spanish_date(name):
+    """Parse Spanish date string like '03ene2022' into a sortable datetime, or None."""
+    import re
+    from datetime import datetime
+    month_map = {
+        'ene': '01', 'feb': '02', 'mar': '03', 'abr': '04',
+        'may': '05', 'jun': '06', 'jul': '07', 'ago': '08',
+        'sep': '09', 'oct': '10', 'nov': '11', 'dic': '12'
+    }
+    m = re.match(r'^(\d{1,2})([a-z]{3})(\d{4})$', name.strip().lower())
+    if m:
+        day, mon_str, year = m.group(1), m.group(2), m.group(3)
+        if mon_str in month_map:
+            try:
+                return datetime(int(year), int(month_map[mon_str]), int(day))
+            except ValueError:
+                pass
+    return None
+
+
+def _format_date_label(name):
+    """Convert '03ene2022' into a nicer label like '03 Ene 2022'."""
+    import re
+    m = re.match(r'^(\d{1,2})([a-z]{3})(\d{4})$', name.strip().lower())
+    if m:
+        day, mon, year = m.group(1), m.group(2).capitalize(), m.group(3)
+        return f"{day} {mon} {year}"
+    return name
+
+
 def create_3d_simulation_plot_time_interpolation(
     data_sheets,
     grid_size=100,
     color_map="viridis",
     z_scale=1.0,
     smoothness=0.0,
-    steps_between_sheets=10
+    steps_between_sheets=10,
+    frame_duration=200
 ):
     """
-    Time-series interpolation of NDVI across multiple sheets.
+    Time-series interpolation of NDVI across multiple sheets with date-aware timeline slider.
+    Optimized: sampled sheets, consistent traces, smooth interpolation.
+    frame_duration: ms per frame (higher = slower). Default 200ms.
     """
     try:
-        sheet_order = list(data_sheets.keys())
+        # Sort sheets chronologically by parsing Spanish date names
+        raw_keys = list(data_sheets.keys())
+        dated_keys = []
+        for k in raw_keys:
+            dt = _parse_spanish_date(k)
+            dated_keys.append((k, dt))
+        dated_keys.sort(key=lambda pair: (pair[1] is None, pair[1] if pair[1] else None))
+        sheet_order = [k for k, _ in dated_keys]
+
         if len(sheet_order) < 2:
             st.warning("Only one sheet found => no multi-sheet time interpolation.")
             return None
+
+        # ── Performance: sample sheets to keep frame count manageable ──
+        max_sheets = 50
+        if len(sheet_order) > max_sheets:
+            # Evenly sample, always keep first and last
+            indices = np.linspace(0, len(sheet_order) - 1, max_sheets, dtype=int)
+            indices = sorted(set(indices))
+            sheet_order = [sheet_order[i] for i in indices]
+
+        anim_grid = min(grid_size, 40)  # Cap grid at 40×40
+        anim_steps = max(min(steps_between_sheets, 6), 4)  # 4–6 sub-steps for smooth interp
 
         lat_min = float('inf')
         lat_max = float('-inf')
@@ -883,8 +935,8 @@ def create_3d_simulation_plot_time_interpolation(
                     z_vals.append(nd[i, j])
             flattened.append((x_vals, y_vals, z_vals))
 
-        xi = np.linspace(lon_min, lon_max, grid_size)
-        yi = np.linspace(lat_min, lat_max, grid_size)
+        xi = np.linspace(lon_min, lon_max, anim_grid)
+        yi = np.linspace(lat_min, lat_max, anim_grid)
         xi, yi = np.meshgrid(xi, yi)
 
         ndvi_grids = []
@@ -901,56 +953,67 @@ def create_3d_simulation_plot_time_interpolation(
             ndvi_grids.append(z_grid)
 
         frames = []
+        frame_names = []
+        frame_date_labels = []
         ndvi_first = ndvi_grids[0]
-        # Use custom NDVI colorscale to match 2D interactive plot
         custom_colorscale = get_custom_ndvi_colorscale()
-        
-        # Create spheres and text for original data points
-        sphere_frames = []
-        for sheet_idx, (x_vals, y_vals, z_vals) in enumerate(flattened):
-            # Create spheres at original data points
-            sphere_trace = go.Scatter3d(
-                x=x_vals,
-                y=y_vals,
-                z=[z * z_scale + 0.02 for z in z_vals],  # Slight offset above surface
+
+        # ── Pre-compute marker data per sheet ──
+        sphere_x = []
+        sphere_y = []
+        sphere_z = []
+        sphere_c = []
+        for (x_vals, y_vals, z_vals) in flattened:
+            sphere_x.append(x_vals)
+            sphere_y.append(y_vals)
+            sphere_z.append([z * z_scale + 0.02 for z in z_vals])
+            sphere_c.append(z_vals)
+
+        num_pts = len(sphere_x[0]) if sphere_x else 0
+
+        def _make_marker_trace(sx, sy, sz, sc):
+            return go.Scatter3d(
+                x=sx, y=sy, z=sz,
                 mode='markers+text',
                 marker=dict(
-                    size=6,
-                    color=z_vals,
+                    size=5,
+                    color=sc,
                     colorscale=custom_colorscale,
                     cmin=global_min,
                     cmax=global_max,
-                    opacity=0.9,
-                    line=dict(width=1, color='white')
+                    opacity=0.85,
                 ),
-                text=[f'{ndvi:.3f}' for ndvi in z_vals],
-                textposition="top center",
-                textfont=dict(size=8, color="white"),
-                hovertemplate='<b>NDVI:</b> %{marker.color:.3f}<br>' +
-                             '<b>Lon:</b> %{x:.6f}<br>' +
+                text=[f'{v:.3f}' for v in sc],
+                textposition='top center',
+                textfont=dict(size=7, color='white'),
+                hovertemplate='<b>NDVI:</b> %{marker.color:.3f}<br>'
+                             '<b>Lon:</b> %{x:.6f}<br>'
                              '<b>Lat:</b> %{y:.6f}<extra></extra>',
-                name=f'Puntos NDVI - Hoja {sheet_idx + 1}',
                 showlegend=False
             )
-            sphere_frames.append(sphere_trace)
-        
+
+        # Build date labels for each sheet
+        sheet_labels = [_format_date_label(s) for s in sheet_order]
+
         for i in range(len(ndvi_grids) - 1):
             start_grid = ndvi_grids[i]
             end_grid = ndvi_grids[i + 1]
-            
-            # Get corresponding sphere data for interpolation
-            start_spheres = sphere_frames[i]
-            end_spheres = sphere_frames[i + 1] if i + 1 < len(sphere_frames) else sphere_frames[i]
-            
-            for step in range(1, steps_between_sheets + 1):
-                alpha = step / float(steps_between_sheets)
+            from_label = sheet_labels[i]
+            to_label = sheet_labels[i + 1]
+
+            for step in range(1, anim_steps + 1):
+                alpha = step / float(anim_steps)
                 ndvi_interp = (1 - alpha) * start_grid + alpha * end_grid
-                
-                # Create interpolated surface
+
+                is_boundary = (step == anim_steps)
+                date_label = to_label if is_boundary else f"{from_label}  →  {to_label}"
+
+                fname = f"frame_{i}_{step}"
+                frame_names.append(fname)
+                frame_date_labels.append(date_label)
+
                 fr_surface = go.Surface(
-                    x=xi,
-                    y=yi,
-                    z=ndvi_interp,
+                    x=xi, y=yi, z=ndvi_interp,
                     surfacecolor=ndvi_interp,
                     colorscale=custom_colorscale,
                     colorbar=dict(title='NDVI'),
@@ -958,111 +1021,118 @@ def create_3d_simulation_plot_time_interpolation(
                     cmax=global_max,
                     showscale=True
                 )
-                
-                # Interpolate sphere positions and colors for smooth animation
-                if i + 1 < len(sphere_frames):
-                    interp_x = [(1 - alpha) * start_spheres.x[j] + alpha * end_spheres.x[j] 
-                               for j in range(len(start_spheres.x))]
-                    interp_y = [(1 - alpha) * start_spheres.y[j] + alpha * end_spheres.y[j] 
-                               for j in range(len(start_spheres.y))]
-                    interp_z = [(1 - alpha) * start_spheres.z[j] + alpha * end_spheres.z[j] 
-                               for j in range(len(start_spheres.z))]
-                    interp_colors = [(1 - alpha) * start_spheres.marker.color[j] + alpha * end_spheres.marker.color[j] 
-                                   for j in range(len(start_spheres.marker.color))]
-                else:
-                    interp_x = list(start_spheres.x)
-                    interp_y = list(start_spheres.y)
-                    interp_z = list(start_spheres.z)
-                    interp_colors = list(start_spheres.marker.color)
-                
-                # Create interpolated spheres
-                fr_spheres = go.Scatter3d(
-                    x=interp_x,
-                    y=interp_y,
-                    z=interp_z,
-                    mode='markers+text',
-                    marker=dict(
-                        size=6,
-                        color=interp_colors,
-                        colorscale=custom_colorscale,
-                        cmin=global_min,
-                        cmax=global_max,
-                        opacity=0.9,
-                        line=dict(width=1, color='white')
-                    ),
-                    text=[f'{ndvi:.3f}' for ndvi in interp_colors],
-                    textposition="top center",
-                    textfont=dict(size=8, color="white"),
-                    hovertemplate='<b>NDVI:</b> %{marker.color:.3f}<br>' +
-                                 '<b>Lon:</b> %{x:.6f}<br>' +
-                                 '<b>Lat:</b> %{y:.6f}<extra></extra>',
-                    name='Puntos NDVI',
-                    showlegend=False
-                )
-                
-                frames.append(go.Frame(data=[fr_surface, fr_spheres], name=f"frame_{i}_{step}"))
 
-        # ✅ Fixed: White Axis Labels & Tick Labels
-        # Create initial surface
+                # ── Always include markers (consistent trace count prevents flicker) ──
+                # Interpolate marker positions + colors for smooth movement
+                if num_pts > 0 and (i + 1) < len(sphere_x):
+                    sx0, sy0, sz0, sc0 = sphere_x[i], sphere_y[i], sphere_z[i], sphere_c[i]
+                    sx1, sy1, sz1, sc1 = sphere_x[i+1], sphere_y[i+1], sphere_z[i+1], sphere_c[i+1]
+                    ix = [(1 - alpha) * sx0[j] + alpha * sx1[j] for j in range(num_pts)]
+                    iy = [(1 - alpha) * sy0[j] + alpha * sy1[j] for j in range(num_pts)]
+                    iz = [(1 - alpha) * sz0[j] + alpha * sz1[j] for j in range(num_pts)]
+                    ic = [(1 - alpha) * sc0[j] + alpha * sc1[j] for j in range(num_pts)]
+                    fr_markers = _make_marker_trace(ix, iy, iz, ic)
+                else:
+                    fr_markers = _make_marker_trace(
+                        sphere_x[0], sphere_y[0], sphere_z[0], sphere_c[0]
+                    )
+
+                frames.append(go.Frame(data=[fr_surface, fr_markers], name=fname))
+
+        # ── Build slider steps (transition=0 for 3D — CSS tweening doesn't help surfaces) ──
+        slider_steps = []
+        for idx, fname in enumerate(frame_names):
+            slider_steps.append(dict(
+                args=[[fname], {
+                    "frame": {"duration": frame_duration, "redraw": True},
+                    "transition": {"duration": 0},
+                    "mode": "immediate"
+                }],
+                label=frame_date_labels[idx],
+                method="animate"
+            ))
+
+        # Initial data (2 traces to match frame trace count)
         initial_surface = go.Surface(
-            x=xi,
-            y=yi,
-            z=ndvi_first,
+            x=xi, y=yi, z=ndvi_first,
             surfacecolor=ndvi_first,
             colorscale=custom_colorscale,
             colorbar=dict(title='NDVI'),
             cmin=global_min,
             cmax=global_max
         )
-        
-        # Create initial spheres for first data sheet
-        if sphere_frames:
-            initial_spheres = sphere_frames[0]
-        else:
-            # Fallback if no sphere frames
-            initial_spheres = go.Scatter3d(x=[], y=[], z=[], mode='markers')
-        
+        initial_markers = _make_marker_trace(
+            sphere_x[0], sphere_y[0], sphere_z[0], sphere_c[0]
+        )
+
         fig = go.Figure(
-            data=[initial_surface, initial_spheres],
+            data=[initial_surface, initial_markers],
             frames=frames
         )
 
         fig.update_layout(
             title='Interpolación de Series Temporales de NDVI',
-            width=900,
+            autosize=True,
             height=900,
             scene=dict(
                 xaxis=dict(
                     title=dict(text='Longitud', font=dict(color="white")),
                     tickfont=dict(color="white"),
-                    color="white"  # ✅ Forces white axis elements
+                    color="white"
                 ),
                 yaxis=dict(
-                    title=dict(text='Latitud', font=dict(color="white")),  # ✅ White Title
-                    tickfont=dict(color="white")  # ✅ White Tick Labels
+                    title=dict(text='Latitud', font=dict(color="white")),
+                    tickfont=dict(color="white")
                 ),
                 zaxis=dict(
-                    title=dict(text='NDVI', font=dict(color="white")),  # ✅ White Title
-                    tickfont=dict(color="white"),  # ✅ White Tick Labels
+                    title=dict(text='NDVI', font=dict(color="white")),
+                    tickfont=dict(color="white"),
                     range=[global_min, global_max]
                 )
             ),
             updatemenus=[
                 dict(
                     type='buttons',
+                    showactive=True,
+                    x=0.0,
+                    xanchor="left",
+                    y=-0.02,
+                    yanchor="top",
+                    direction="left",
+                    pad=dict(r=10, t=60),
                     buttons=[
                         dict(
-                            label='Reproducir',
+                            label="▶ Lento",
                             method='animate',
-                            args=[None, {
-                                "frame": {"duration": 100, "redraw": True},
-                                "transition": {"duration": 0, "easing": "linear"},
+                            args=[frame_names, {
+                                "frame": {"duration": 400, "redraw": True},
+                                "transition": {"duration": 0},
                                 "fromcurrent": True,
                                 "mode": "immediate"
                             }]
                         ),
                         dict(
-                            label='Pausar',
+                            label="▶ Normal",
+                            method='animate',
+                            args=[frame_names, {
+                                "frame": {"duration": frame_duration, "redraw": True},
+                                "transition": {"duration": 0},
+                                "fromcurrent": True,
+                                "mode": "immediate"
+                            }]
+                        ),
+                        dict(
+                            label="▶ Rápido",
+                            method='animate',
+                            args=[frame_names, {
+                                "frame": {"duration": 50, "redraw": True},
+                                "transition": {"duration": 0},
+                                "fromcurrent": True,
+                                "mode": "immediate"
+                            }]
+                        ),
+                        dict(
+                            label="⏸ Pausar",
                             method='animate',
                             args=[
                                 [None],
@@ -1074,6 +1144,32 @@ def create_3d_simulation_plot_time_interpolation(
                             ]
                         )
                     ]
+                )
+            ],
+            sliders=[
+                dict(
+                    active=0,
+                    x=0.05,
+                    len=0.9,
+                    xanchor="left",
+                    y=-0.05,
+                    yanchor="top",
+                    pad=dict(b=10, t=40),
+                    currentvalue=dict(
+                        prefix="Fecha: ",
+                        visible=True,
+                        xanchor="center",
+                        font=dict(size=14, color="white")
+                    ),
+                    transition=dict(duration=0),
+                    steps=slider_steps,
+                    ticklen=0,
+                    minorticklen=0,
+                    font=dict(size=1, color="rgba(0,0,0,0)"),
+                    bgcolor="rgba(40,40,40,0.8)",
+                    activebgcolor="rgba(70,130,180,0.9)",
+                    bordercolor="rgba(100,100,100,0.5)",
+                    borderwidth=1
                 )
             ]
         )

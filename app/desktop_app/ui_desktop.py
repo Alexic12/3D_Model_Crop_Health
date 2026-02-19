@@ -1346,12 +1346,119 @@ def render_ui() -> None:
                             st.plotly_chart(fig_3d, use_container_width=True, use_container_height=True, config={'scrollZoom': False})
 
                 fig_time = create_3d_simulation_plot_time_interpolation(
-                    data_sheets, grid_size, color_map, z_scale, smoothness, steps_value
+                    data_sheets, grid_size, color_map, z_scale, smoothness, steps_value,
+                    frame_duration=200
                 )
                 if fig_time:
-                    fig_time.update_layout(margin=dict(l=0, r=0, t=30, b=0))
+                    fig_time.update_layout(
+                        margin=dict(l=0, r=0, t=30, b=100),
+                        paper_bgcolor='rgba(0,0,0,0)',
+                        plot_bgcolor='rgba(0,0,0,0)',
+                        autosize=True,
+                        width=None,   # remove fixed width so it fills container
+                        height=900,
+                    )
                     st.markdown("#### Animación 3D de Series Temporales")
-                    st.plotly_chart(fig_time, use_container_width=True, config={'scrollZoom': False})
+                    # Render via components.html with embedded JS speed slider
+                    # so speed changes happen client-side (no Streamlit rerun / chart rebuild)
+                    import plotly.io as pio
+                    chart_html = pio.to_html(
+                        fig_time, include_plotlyjs='cdn', full_html=False,
+                        config={'scrollZoom': False}
+                    )
+                    # Extract frame names from figure for JS animate call
+                    _frame_names_js = [f.name for f in fig_time.frames]
+                    import json as _json
+                    _frame_names_json = _json.dumps(_frame_names_js)
+                    speed_slider_html = f"""
+                    <style>
+                        html, body {{
+                            margin: 0; padding: 0;
+                            background: transparent !important;
+                            overflow: hidden;
+                        }}
+                        .speed-control {{
+                            display: flex; align-items: center; justify-content: center;
+                            gap: 14px; padding: 8px 0 4px 0; font-family: sans-serif;
+                        }}
+                        .speed-control label {{
+                            color: #ccc; font-size: 14px; white-space: nowrap;
+                        }}
+                        .speed-control input[type=range] {{
+                            width: 260px; accent-color: #4682B4; cursor: pointer;
+                        }}
+                        .speed-control .speed-val {{
+                            color: #4682B4; font-weight: bold; font-size: 14px;
+                            min-width: 55px; text-align: center;
+                        }}
+                        /* Make plotly chart fill width and center */
+                        .js-plotly-plot,
+                        .plotly-graph-div,
+                        .plot-container,
+                        .svg-container {{
+                            margin: 0 auto !important;
+                            width: 100% !important;
+                            max-width: 100% !important;
+                        }}
+                    </style>
+                    <div class="speed-control">
+                        <label>🎚️ Velocidad:</label>
+                        <span style="color:#aaa;font-size:12px;">Rápido</span>
+                        <input type="range" id="jsSpeedSlider" min="30" max="800" value="200" step="10">
+                        <span style="color:#aaa;font-size:12px;">Lento</span>
+                        <span class="speed-val" id="jsSpeedVal">200 ms</span>
+                    </div>
+                    {chart_html}
+                    <script>
+                    (function() {{
+                        var frameNames = {_frame_names_json};
+                        var slider = document.getElementById('jsSpeedSlider');
+                        var valLabel = document.getElementById('jsSpeedVal');
+                        var plotDiv = document.querySelector('.plotly-graph-div');
+                        var isPlaying = false;
+
+                        // Detect play/pause from Plotly button clicks
+                        if (plotDiv) {{
+                            plotDiv.on('plotly_animated', function() {{ isPlaying = false; }});
+                            plotDiv.on('plotly_animatingframe', function() {{ isPlaying = true; }});
+                        }}
+
+                        slider.addEventListener('input', function() {{
+                            var ms = parseInt(this.value);
+                            valLabel.textContent = ms + ' ms';
+                            if (plotDiv && isPlaying) {{
+                                // Re-issue animate from current frame with new speed
+                                Plotly.animate(plotDiv, frameNames, {{
+                                    frame: {{duration: ms, redraw: true}},
+                                    transition: {{duration: 0}},
+                                    fromcurrent: true,
+                                    mode: 'immediate'
+                                }});
+                            }}
+                        }});
+
+                        // Also disable scroll zoom on the 3D scene
+                        if (plotDiv) {{
+                            plotDiv.addEventListener('wheel', function(e) {{ e.preventDefault(); }}, {{passive: false}});
+                        }}
+
+                        // Force chart to fill container width
+                        if (plotDiv) {{
+                            Plotly.relayout(plotDiv, {{autosize: true}});
+                            window.addEventListener('resize', function() {{
+                                Plotly.Plots.resize(plotDiv);
+                            }});
+                        }}
+                    }})();
+                    </script>
+                    """
+                    # Inject transparent background on the Streamlit iframe itself
+                    components.html(speed_slider_html, height=1020, scrolling=False)
+                    st.markdown(
+                        '<style>iframe[title="streamlit_components.v1.components.html"]'
+                        '{background:transparent !important;}</style>',
+                        unsafe_allow_html=True
+                    )
             else:
                 # Single-sheet processed fallback
                 df_single = process_uploaded_file(processed_path)
