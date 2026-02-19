@@ -398,22 +398,24 @@ def create_complete_excel_data(hpc_data, indice):
     
     # Add point summary
     for result in results:
-        point_idx = result.get("point_idx", "N/A")
-        # Extract coordinates if available
-        lat = "N/A"
-        lon = "N/A" 
-        summary_ws.append([f"Punto {point_idx}", lat, lon, "✅"])
+        point_idx = result.get("point_idx", 0)
+        display_idx = point_idx + 1  # 1-based display
+        # Extract coordinates from HPC result
+        lat = result.get("lat", "N/A")
+        lon = result.get("lon", "N/A")
+        summary_ws.append([f"Punto {display_idx}", lat, lon, "✅"])
     
     # Create detailed sheet for each point
     for result in results:
-        point_idx = result.get("point_idx", "N/A")
-        sheet_name = f"📍 Punto {point_idx}"
+        point_idx = result.get("point_idx", 0)
+        display_idx = point_idx + 1  # 1-based display
+        sheet_name = f"📍 Punto {display_idx}"
         
         # Create worksheet for this point
         ws = wb.create_sheet(sheet_name)
         
         # Add header information
-        ws.append([f"Datos HPC - Punto {point_idx}"])
+        ws.append([f"Datos HPC - Punto {display_idx}"])
         ws.append([f"Índice: {indice}"])
         ws.append([f"Fuente: Datos {data_source}"])
         ws.append([""])
@@ -1343,7 +1345,7 @@ def render_ui() -> None:
                         fig_3d = create_3d_surface_plot(df_3d, grid_size, color_map, z_scale, smoothness)
                         if fig_3d:
                             fig_3d.update_layout(margin=dict(l=0, r=0, t=30, b=0), autosize=True)
-                            st.plotly_chart(fig_3d, use_container_width=True, use_container_height=True, config={'scrollZoom': False})
+                            st.plotly_chart(fig_3d, use_container_width=True, config={'scrollZoom': False})
 
                 fig_time = create_3d_simulation_plot_time_interpolation(
                     data_sheets, grid_size, color_map, z_scale, smoothness, steps_value,
@@ -1588,7 +1590,7 @@ def render_ui() -> None:
             if "hpc_data" in st.session_state:
                 hpc_data = st.session_state["hpc_data"]
                 results = hpc_data.get("results", [])
-                point_labels = [f"(Punto={r['point_idx']})" for r in results]
+                point_labels = [f"(Punto={r['point_idx'] + 1})" for r in results]
                 if point_labels:
                     chosen_point = st.selectbox("Seleccionar resultado de punto HPC", point_labels)
                     chosen_idx = point_labels.index(chosen_point)
@@ -1692,7 +1694,7 @@ def render_ui() -> None:
                         showlegend=True,
                         margin=dict(l=0, r=0, t=30, b=0),
                     )
-                    st.plotly_chart(fig, use_container_width=True, use_container_height=True)
+                    st.plotly_chart(fig, use_container_width=True)
                 else:
                     st.info("No hay datos HPC cargados/seleccionados. Ejecuta el pipeline o elige un punto.")
 
