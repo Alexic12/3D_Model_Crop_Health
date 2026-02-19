@@ -791,6 +791,124 @@ def render_ui() -> None:
     from app.ui.responsive_components import ResponsiveLayout
     ResponsiveLayout.responsive_container()
 
+    # Lock page zoom — prevent scroll-wheel zoom everywhere
+    st.markdown(
+        """
+        <style>
+            /* Prevent pinch-zoom on touch devices */
+            html, body {
+                touch-action: pan-x pan-y;
+                -ms-content-zooming: none;
+            }
+            /* Plotly modebar stays clickable */
+            .js-plotly-plot .plotly .modebar {
+                pointer-events: auto;
+            }
+        </style>
+        <script>
+            (function() {
+                // Helper: attach zoom-block listeners to a window/document
+                function blockZoom(win, doc) {
+                    try {
+                        // Block Ctrl+scroll (browser zoom)
+                        doc.addEventListener('wheel', function(e) {
+                            if (e.ctrlKey || e.metaKey) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                return false;
+                            }
+                        }, { passive: false, capture: true });
+
+                        // Block Ctrl+Plus / Ctrl+Minus / Ctrl+0 keyboard zoom
+                        doc.addEventListener('keydown', function(e) {
+                            if ((e.ctrlKey || e.metaKey) && (e.key === '+' || e.key === '-' || e.key === '=' || e.key === '0')) {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                return false;
+                            }
+                        }, { capture: true });
+                    } catch(err) {}
+                }
+
+                // Block on current window
+                blockZoom(window, document);
+
+                // Block on parent window (Streamlit shell)
+                try {
+                    if (window.parent && window.parent !== window) {
+                        blockZoom(window.parent, window.parent.document);
+                    }
+                } catch(e) {}
+
+                // Block on top window
+                try {
+                    if (window.top && window.top !== window) {
+                        blockZoom(window.top, window.top.document);
+                    }
+                } catch(e) {}
+
+                // Block inside child iframes (mpld3, plotly embeds)
+                function blockIframeZoom() {
+                    document.querySelectorAll('iframe').forEach(function(iframe) {
+                        try {
+                            if (iframe.contentDocument) {
+                                blockZoom(iframe.contentWindow, iframe.contentDocument);
+                            }
+                        } catch(e) {}
+                    });
+                }
+
+                // Disable Plotly scroll zoom and watch for new elements
+                var observer = new MutationObserver(function() {
+                    blockIframeZoom();
+                    document.querySelectorAll('.js-plotly-plot').forEach(function(plot) {
+                        if (plot._fullLayout) {
+                            try { Plotly.relayout(plot, {'scene.dragmode': 'turntable'}); } catch(e) {}
+                        }
+                    });
+                });
+                observer.observe(document.body, { childList: true, subtree: true });
+
+                // Run once on load
+                blockIframeZoom();
+            })();
+        </script>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Hidden iframe that injects zoom-block JS into the parent Streamlit shell
+    components.html(
+        """
+        <script>
+        (function() {
+            // Target every frame level: current, parent, top
+            var targets = [window, window.parent, window.top];
+            targets.forEach(function(w) {
+                try {
+                    w.document.addEventListener('wheel', function(e) {
+                        if (e.ctrlKey || e.metaKey) {
+                            e.preventDefault();
+                            e.stopImmediatePropagation();
+                            return false;
+                        }
+                    }, { passive: false, capture: true });
+                    w.document.addEventListener('keydown', function(e) {
+                        if ((e.ctrlKey || e.metaKey) &&
+                            (e.key==='+' || e.key==='-' || e.key==='=' || e.key==='0')) {
+                            e.preventDefault();
+                            e.stopImmediatePropagation();
+                            return false;
+                        }
+                    }, { capture: true });
+                } catch(err) {}
+            });
+        })();
+        </script>
+        """,
+        height=0,
+    )
+
     st.title("Visualización de Salud de Cultivos")
     st.write("---")
     page_mode = st.radio("Seleccionar Página de Visualización", ["Visualización 3D", "Visualización Prospectiva", "Gestión de Riesgos"], index=0)
@@ -1093,7 +1211,7 @@ def render_ui() -> None:
                     "Seleccionar hoja para datos procesados (3D estático y 2D)", sheet_list, key="processed_sheet_selector"
                 )
 
-                col1, col2 = st.columns([1.3, 1], gap="medium")
+                col1, col2 = st.columns([1, 1], gap="small")
                 with col1:
                     if current_field:
                         qgis_file = os.path.join(
@@ -1154,19 +1272,60 @@ def render_ui() -> None:
                         from io import BytesIO
                         
                         img = Image.open(image_path)
-                        # Convert to base64 for HTML display
+                        # Upscale small images so they display large and crisp
+                        min_display_width = 800
+                        if img.width < min_display_width:
+                            scale = min_display_width // img.width + 1
+                            img = img.resize(
+                                (img.width * scale, img.height * scale),
+                                Image.NEAREST
+                            )
+                        
+                        # Render as inline HTML (no iframe) so it zooms with the page
                         buffer = BytesIO()
                         img.save(buffer, format='PNG')
                         img_b64 = base64.b64encode(buffer.getvalue()).decode()
                         
-                        st.markdown(
-                            f'<div style="max-width: 80%; margin: 15% auto 0 auto;">'
-                            f'<img src="data:image/png;base64,{img_b64}" '
-                            f'style="width: 100%; height: auto; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);" />'
-                            f'<p style="text-align: center; margin-top: 8px; color: #666;">NDVI ColorMap - {chosen_sheet_processed}</p>'
-                            f'</div>',
-                            unsafe_allow_html=True
-                        )
+                        ndvi_html = f"""
+                        <html><body style="margin:0; padding:0; overflow:hidden;">
+                        <div style="display:flex; flex-direction:column; align-items:flex-start;
+                                    justify-content:flex-start; width:100%;
+                                    box-sizing:border-box; padding:70px 0 0 0;">
+                            <img src="data:image/png;base64,{img_b64}"
+                                 style="display:block; width:65%; height:auto;
+                                        border-radius:8px;
+                                        box-shadow:0 2px 8px rgba(0,0,0,0.15);" />
+                            <p style="text-align:center; width:75%; margin-top:8px; color:#666;
+                                      font-family:sans-serif; font-size:14px;">
+                                NDVI ColorMap - {chosen_sheet_processed}
+                            </p>
+                        </div>
+                        <script>
+                        (function() {{
+                            var targets = [document];
+                            try {{ if (window.parent && window.parent.document) targets.push(window.parent.document); }} catch(e) {{}}
+                            try {{ if (window.top && window.top.document) targets.push(window.top.document); }} catch(e) {{}}
+                            targets.forEach(function(doc) {{
+                                doc.addEventListener('wheel', function(e) {{
+                                    if (e.ctrlKey || e.metaKey) {{
+                                        e.preventDefault();
+                                        e.stopImmediatePropagation();
+                                        return false;
+                                    }}
+                                }}, {{ passive: false, capture: true }});
+                                doc.addEventListener('keydown', function(e) {{
+                                    if ((e.ctrlKey || e.metaKey) && (e.key==='+' || e.key==='-' || e.key==='=' || e.key==='0')) {{
+                                        e.preventDefault();
+                                        e.stopImmediatePropagation();
+                                        return false;
+                                    }}
+                                }}, {{ capture: true }});
+                            }});
+                        }})();
+                        </script>
+                        </body></html>
+                        """
+                        components.html(ndvi_html, height=520, scrolling=False)
                     else:
                         # Fallback to 3D plot if no image found
                         lat_arr = data_sheets[chosen_sheet_processed]["lat"]
@@ -1184,7 +1343,7 @@ def render_ui() -> None:
                         fig_3d = create_3d_surface_plot(df_3d, grid_size, color_map, z_scale, smoothness)
                         if fig_3d:
                             fig_3d.update_layout(margin=dict(l=0, r=0, t=30, b=0), autosize=True)
-                            st.plotly_chart(fig_3d, use_container_width=True, use_container_height=True)
+                            st.plotly_chart(fig_3d, use_container_width=True, use_container_height=True, config={'scrollZoom': False})
 
                 fig_time = create_3d_simulation_plot_time_interpolation(
                     data_sheets, grid_size, color_map, z_scale, smoothness, steps_value
@@ -1192,7 +1351,7 @@ def render_ui() -> None:
                 if fig_time:
                     fig_time.update_layout(margin=dict(l=0, r=0, t=30, b=0))
                     st.markdown("#### Animación 3D de Series Temporales")
-                    st.plotly_chart(fig_time, use_container_width=True)
+                    st.plotly_chart(fig_time, use_container_width=True, config={'scrollZoom': False})
             else:
                 # Single-sheet processed fallback
                 df_single = process_uploaded_file(processed_path)

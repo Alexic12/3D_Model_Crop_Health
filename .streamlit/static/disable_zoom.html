@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script>
+// This runs at the top-level Streamlit shell, outside any iframe
+document.addEventListener('wheel', function(e) {
+    if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+    }
+}, { passive: false, capture: true });
+
+document.addEventListener('keydown', function(e) {
+    if ((e.ctrlKey || e.metaKey) && (e.key === '+' || e.key === '-' || e.key === '=' || e.key === '0')) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+    }
+}, { capture: true });
+</script>
+</head>
+<body></body>
+</html>

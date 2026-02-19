@@ -13,8 +13,8 @@ class Settings(BaseSettings):
     # ── Streamlit workers ──────────────────────────────────────────────
     DESKTOP_SCRIPT: str = Field(default=str(BASE_DIR / "desktop_app/ui_desktop.py"))
     MOBILE_SCRIPT:  str = Field(default=str(BASE_DIR / "mobile_app/ui_mobile.py"))
-    DESKTOP_PORT:   int = Field(default=8501)
-    MOBILE_PORT:    int = Field(default=8502)
+    DESKTOP_PORT:   int = Field(default=8504)
+    MOBILE_PORT:    int = Field(default=8505)
 
     # ── FastAPI server ─────────────────────────────────────────────────
     API_HOST: str = Field(default="0.0.0.0")

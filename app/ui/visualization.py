@@ -458,7 +458,8 @@ def create_2d_scatter_plot_ndvi_interactive_qgis(
         )
 
         # 8.1) Annotate points
-        indices_sorted = sorted(range(len(x_plot)), key=lambda i: (-y_plot[i], x_plot[i]))
+        # Column-major order from bottom-left: leftmost column bottom-to-top first, then next column, etc.
+        indices_sorted = sorted(range(len(x_plot)), key=lambda i: (x_plot[i], y_plot[i]))
         y_offset = -0.015 * (lat_max_adj - lat_min_adj)
         for order, idx in enumerate(indices_sorted, start=1):
             ax.text(
@@ -469,7 +470,8 @@ def create_2d_scatter_plot_ndvi_interactive_qgis(
                 fontweight='bold',
                 ha='center',
                 va='bottom',
-                zorder=2
+                zorder=2,
+                clip_on=False
             )
 
         # 9) Tick formatting
@@ -500,9 +502,14 @@ def create_2d_scatter_plot_ndvi_interactive_qgis(
         tooltip = plugins.PointHTMLTooltip(sc, labels=labels, css="font-size:12px; font-family:sans-serif;")
         plugins.connect(fig, tooltip)
 
+        # Disable mpld3 scroll zoom so the page scrolls normally
+        # and all elements (raster + points + labels) stay cohesive
+        plugins.connect(fig, plugins.Reset())
+
         html_str = mpld3.fig_to_html(fig)
 
-        # 11) JavaScript
+        # 11) JavaScript — disable scroll zoom on the mpld3 figure so the
+        #     whole page scrolls uniformly and raster layers stay in sync.
         custom_js = """
         <script>
             function adjustTooltipPosition(event, d) {
@@ -529,6 +536,35 @@ def create_2d_scatter_plot_ndvi_interactive_qgis(
                 let tooltip = document.querySelector(".mpld3-tooltip");
                 if (tooltip) adjustTooltipPosition(event);
             });
+
+            // Disable mpld3 scroll/wheel zoom so the page scrolls cohesively
+            (function() {
+                function disableScrollZoom() {
+                    var svgs = document.querySelectorAll(".mpld3-figure svg");
+                    if (svgs.length === 0) svgs = document.querySelectorAll("svg.mpld3-figure");
+                    if (svgs.length === 0) svgs = document.querySelectorAll("svg");
+                    svgs.forEach(function(svg) {
+                        svg.addEventListener("wheel", function(e) { e.stopPropagation(); }, true);
+                    });
+                    // Also remove mpld3 scroll plugin behavior on the axes
+                    if (typeof mpld3 !== 'undefined' && mpld3.figures) {
+                        mpld3.figures.forEach(function(fig) {
+                            if (fig.axes) {
+                                fig.axes.forEach(function(ax) {
+                                    ax.enable_zoom = function() {};
+                                    ax.disable_zoom = function() {};
+                                    if (ax.zoom) { ax.zoom.on('zoom', null); }
+                                });
+                            }
+                        });
+                    }
+                }
+                if (document.readyState === 'complete') {
+                    setTimeout(disableScrollZoom, 500);
+                } else {
+                    window.addEventListener('load', function() { setTimeout(disableScrollZoom, 500); });
+                }
+            })();
         </script>
         """
 
@@ -556,7 +592,34 @@ def create_2d_scatter_plot_ndvi_interactive_qgis(
         </style>
         """
 
-        html_str = custom_css + html_str + custom_js
+        # 13) Block Ctrl+wheel zoom inside this iframe
+        zoom_block_js = """
+        <script>
+        (function() {
+            var targets = [document];
+            try { if (window.parent && window.parent.document) targets.push(window.parent.document); } catch(e) {}
+            try { if (window.top && window.top.document) targets.push(window.top.document); } catch(e) {}
+            targets.forEach(function(doc) {
+                doc.addEventListener('wheel', function(e) {
+                    if (e.ctrlKey || e.metaKey) {
+                        e.preventDefault();
+                        e.stopImmediatePropagation();
+                        return false;
+                    }
+                }, { passive: false, capture: true });
+                doc.addEventListener('keydown', function(e) {
+                    if ((e.ctrlKey || e.metaKey) && (e.key==='+' || e.key==='-' || e.key==='=' || e.key==='0')) {
+                        e.preventDefault();
+                        e.stopImmediatePropagation();
+                        return false;
+                    }
+                }, { capture: true });
+            });
+        })();
+        </script>
+        """
+
+        html_str = custom_css + html_str + custom_js + zoom_block_js
         return html_str
 
     except Exception as e:
