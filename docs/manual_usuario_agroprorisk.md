@@ -6,7 +6,7 @@
 ### 📋 Información del Sistema
 - **Desarrollado por:** Universidad EAFIT
 - **Autor:** Alejandro Puerta
-- **Versión:** 2024
+- **Versión:** 2026
 - **Plataforma:** Aplicación Web Desktop
 
 ---

@@ -362,6 +362,34 @@ def create_ghg_analysis_excel(ghg_data, field_name=None):
         return buffer
 
 
+def save_hpc_workbook_to_disk(hpc_data, indice, anio, field_name):
+    """
+    Persist the HPC prospective workbook next to QGIS/IDW/Espacial files so the
+    mobile app can consume it.
+
+    Path: assets/data/{field_name}/INFORME_{indice}_HPC_{anio}.xlsx
+    Returns the absolute path on success or None on failure.
+    """
+    try:
+        if not field_name:
+            logger.warning("save_hpc_workbook_to_disk: missing field_name; skipping persist.")
+            return None
+        buffer = create_complete_excel_data(hpc_data, indice)
+        out_dir = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            "assets", "data", field_name,
+        )
+        os.makedirs(out_dir, exist_ok=True)
+        out_path = os.path.join(out_dir, f"INFORME_{indice}_HPC_{anio}.xlsx")
+        with open(out_path, "wb") as fh:
+            fh.write(buffer.getvalue())
+        logger.info(f"HPC workbook persisted => {out_path}")
+        return out_path
+    except Exception as exc:
+        logger.exception(f"Failed to persist HPC workbook: {exc}")
+        return None
+
+
 def create_complete_excel_data(hpc_data, indice):
     """
     Create a comprehensive Excel file with all HPC data for all points and dates.
@@ -1533,6 +1561,12 @@ def render_ui() -> None:
                         st.error("El pipeline HPC devolvió None. Revisa los logs o rutas de archivos.")
                     else:
                         st.session_state["hpc_data"] = hpc_data
+                        # Auto-persist prospective workbook for the mobile app
+                        saved_path = save_hpc_workbook_to_disk(hpc_data, indice, anio, field_name)
+                        if saved_path:
+                            st.info(f"💾 Datos prospectivos guardados para móvil: `{os.path.basename(saved_path)}`")
+                        else:
+                            st.warning("⚠️ No se pudo guardar el archivo prospectivo para la versión móvil.")
                         # Show data source information
                         if hpc_data.get("using_mock_data", False):
                             st.warning("⚠️ Pipeline HPC completado usando **datos de clima SIMULADOS** (no se subió ningún archivo de clima real). Los resultados son solo para pruebas.")
