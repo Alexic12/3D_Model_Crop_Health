@@ -713,11 +713,26 @@ def _responsive_css() -> None:
           [data-testid="stHeader"] * {
               pointer-events: auto;
           }
-          /* Hide just the decorative toolbar items, not the whole header. */
+          /* Hide just the decorative toolbar items, not the whole header.
+             stStatusWidget is intentionally kept visible so users see when
+             the app is running long background tasks. */
           [data-testid="stToolbar"],
-          [data-testid="stDecoration"],
-          [data-testid="stStatusWidget"] {
+          [data-testid="stDecoration"] {
               display: none !important;
+          }
+
+          /* Make Streamlit's running indicator more prominent. */
+          [data-testid="stStatusWidget"] {
+              position: fixed !important;
+              top: 10px !important;
+              right: 60px !important;
+              z-index: 1001 !important;
+              background: #fff8e1 !important;
+              border: 1px solid #f0c36d !important;
+              border-radius: 6px !important;
+              padding: 4px 10px !important;
+              box-shadow: 0 2px 8px rgba(0,0,0,0.18) !important;
+              font-weight: 600 !important;
           }
 
           /* Keep the collapsed-sidebar reopen button visible and pinned to the
@@ -1233,9 +1248,10 @@ def render_ui() -> None:
                 st.success(f"Todos los archivos guardados en {field_name}/{indice}/{anio}.")
                 
                 # Then process the files
-                esp_xlsx, idw_xlsx, qgis_xlsx = bulk_unzip_and_analyze_new_parallel(
-                    indice, anio, base_folder=field_folder
-                )
+                with st.spinner("⏳ Ejecutando análisis masivo... Esto puede tardar varios minutos."):
+                    esp_xlsx, idw_xlsx, qgis_xlsx = bulk_unzip_and_analyze_new_parallel(
+                        indice, anio, base_folder=field_folder
+                    )
                 if esp_xlsx and os.path.exists(esp_xlsx):
                     st.success(f"Espacial => {esp_xlsx}")
                 if idw_xlsx and os.path.exists(idw_xlsx):
@@ -1670,7 +1686,8 @@ def render_ui() -> None:
                         field_base_folder = os.path.join("./upload_data", safe_field_name)
                     else:
                         field_base_folder = "./upload_data"
-                    hpc_data = run_full_hpc_pipeline(indice, anio, base_folder=field_base_folder)
+                    with st.spinner("⏳ Ejecutando pipeline HPC... Esto puede tardar varios minutos."):
+                        hpc_data = run_full_hpc_pipeline(indice, anio, base_folder=field_base_folder)
                     if hpc_data is None:
                         st.error("El pipeline HPC devolvió None. Revisa los logs o rutas de archivos.")
                     else:

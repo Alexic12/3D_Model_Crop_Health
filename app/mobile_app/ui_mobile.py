@@ -20,7 +20,9 @@ Touch and mouse clicks both work via streamlit-folium's last_clicked.
 from __future__ import annotations
 
 import logging
+import os
 import re
+from datetime import date
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from zipfile import BadZipFile
@@ -42,6 +44,83 @@ ASSETS_DIR = BASE_DIR / "assets" / "data"
 N_MONTHS = 12
 MONTH_COLS = [f"Mes_{i + 1}" for i in range(N_MONTHS)]
 RISK_LEVELS = list(range(7))  # 0..6
+
+# Spanish month abbreviations used in the source ZIP filenames
+# (e.g. 01ene2022, 10feb2022, 28abr2022, 05sep2022, 03oct2022, 15dic2022).
+_ES_MONTH_ABBR_TO_NUM = {
+    "ene": 1, "feb": 2, "mar": 3, "abr": 4, "may": 5, "jun": 6,
+    "jul": 7, "ago": 8, "sep": 9, "set": 9, "oct": 10, "nov": 11, "dic": 12,
+}
+_ES_MONTH_NUM_TO_ABBR = {
+    1: "Ene", 2: "Feb", 3: "Mar", 4: "Abr", 5: "May", 6: "Jun",
+    7: "Jul", 8: "Ago", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dic",
+}
+_ZIP_DATE_RE = re.compile(
+    r"(\d{1,2})(" + "|".join(_ES_MONTH_ABBR_TO_NUM.keys()) + r")(\d{4})",
+    re.IGNORECASE,
+)
+
+
+def _latest_zip_date(field_name: str) -> Optional[date]:
+    """Find the most recent date encoded in ZIP filenames for a field.
+
+    Searches `./upload_data/{field_name}/` (recursively) for files like
+    `001. Campo_Luna_Roja_NDVI_15oct2022.zip` and returns the latest date.
+    """
+    base = Path("./upload_data") / field_name
+    if not base.exists():
+        # Fall back to the underscore-normalized variant
+        alt = Path("./upload_data") / field_name.replace(" ", "_")
+        if alt.exists():
+            base = alt
+        else:
+            return None
+    latest: Optional[date] = None
+    for root, _dirs, files in os.walk(base):
+        for f in files:
+            if not f.lower().endswith(".zip"):
+                continue
+            m = _ZIP_DATE_RE.search(f.lower())
+            if not m:
+                continue
+            day = int(m.group(1))
+            mon = _ES_MONTH_ABBR_TO_NUM.get(m.group(2).lower())
+            year = int(m.group(3))
+            if mon is None:
+                continue
+            try:
+                d = date(year, mon, day)
+            except ValueError:
+                continue
+            if latest is None or d > latest:
+                latest = d
+    return latest
+
+
+def _add_months(d: date, months: int) -> date:
+    """Return d shifted forward by `months` calendar months (day clamped)."""
+    total = d.month - 1 + months
+    new_year = d.year + total // 12
+    new_month = total % 12 + 1
+    # Clamp the day to the last valid day of the target month
+    if new_month == 12:
+        next_first = date(new_year + 1, 1, 1)
+    else:
+        next_first = date(new_year, new_month + 1, 1)
+    last_day = (next_first - (next_first - date(new_year, new_month, 1))).day  # =1
+    # Simpler: compute last day of new_month
+    import calendar
+    last_day = calendar.monthrange(new_year, new_month)[1]
+    return date(new_year, new_month, min(d.day, last_day))
+
+
+def _prospective_month_label(base_date: Optional[date], month_idx: int) -> str:
+    """Build a label like 'Mes 1 - Nov 2025'. Falls back to 'Mes N' if no base."""
+    if base_date is None:
+        return f"Mes {month_idx + 1}"
+    target = _add_months(base_date, month_idx + 1)
+    abbr = _ES_MONTH_NUM_TO_ABBR[target.month]
+    return f"Mes {month_idx + 1} - {abbr} {target.year}"
 
 
 # ────────────────────────── HPC LOADING ──────────────────────────
@@ -73,6 +152,21 @@ def _parse_point_sheet(df: pd.DataFrame) -> List[Dict[str, Optional[float]]]:
 
     months: List[Dict[str, Optional[float]]] = []
     for _, row in body.iterrows():
+        # The vegetation-index column is named after the chosen indice
+        # (e.g. "NDVI"). Fall back to the first matching column if the exact
+        # header isn't present.
+        ndvi_val = None
+        for col_name in ("NDVI", "ndvi"):
+            if col_name in row.index:
+                ndvi_val = _coerce_float(row.get(col_name))
+                if ndvi_val is not None:
+                    break
+        if ndvi_val is None:
+            for col_name, val in row.items():
+                if isinstance(col_name, str) and col_name.strip().upper() in ("NDVI", "EVI", "SAVI", "GNDVI"):
+                    ndvi_val = _coerce_float(val)
+                    if ndvi_val is not None:
+                        break
         months.append({
             "mean_usd": _coerce_float(row.get("Mean (USD)")),
             "p75_usd": _coerce_float(row.get("75% (USD)")),
@@ -80,9 +174,10 @@ def _parse_point_sheet(df: pd.DataFrame) -> List[Dict[str, Optional[float]]]:
             "pc1": _coerce_float(row.get("%C1")),
             "pc2": _coerce_float(row.get("%C2")),
             "pc3": _coerce_float(row.get("%C3")),
+            "ndvi": ndvi_val,
         })
     while len(months) < N_MONTHS:
-        months.append({k: None for k in ("mean_usd", "p75_usd", "opvar99_usd", "pc1", "pc2", "pc3")})
+        months.append({k: None for k in ("mean_usd", "p75_usd", "opvar99_usd", "pc1", "pc2", "pc3", "ndvi")})
     return months
 
 
@@ -254,15 +349,16 @@ def _build_map(
                title_cancel="Salir", force_separate_button=True).add_to(fmap)
     LocateControl(auto_start=False, position="topleft").add_to(fmap)
 
-    opv = [v for v in _month_values(points, month_idx, "opvar99_usd") if v is not None]
-    if opv:
-        vmin, vmax = min(opv), max(opv)
+    ndvi_vals = [v for v in _month_values(points, month_idx, "ndvi") if v is not None]
+    if ndvi_vals:
+        vmin, vmax = min(ndvi_vals), max(ndvi_vals)
         if vmax <= vmin:
-            vmax = vmin + 1.0
+            vmax = vmin + 1e-3
+        # Low NDVI = poor health (red), high NDVI = healthy (green)
         cmap = cm.LinearColormap(
-            colors=["#2ca02c", "#ffff00", "#ff7f0e", "#d62728"],
+            colors=["#d62728", "#ff7f0e", "#ffff00", "#2ca02c"],
             vmin=vmin, vmax=vmax,
-            caption=f"OpVar-99% USD – Mes {month_idx + 1}",
+            caption=f"NDVI – Mes {month_idx + 1}",
         )
         cmap.add_to(fmap)
     else:
@@ -274,22 +370,21 @@ def _build_map(
         if p["lat"] is None or p["lon"] is None:
             continue
         month_data = p["months"][month_idx] if p["months"] else {}
-        opv99 = month_data.get("opvar99_usd")
+        ndvi_val = month_data.get("ndvi")
         nuevo = manual_lookup.get(p["point_num"], 0)
         try:
             nuevo_int = int(nuevo) if pd.notna(nuevo) else 0
         except (TypeError, ValueError):
             nuevo_int = 0
 
-        if not p["available"] or opv99 is None:
+        if not p["available"] or ndvi_val is None:
             fill = "#888888"
             fill_opacity = 0.25
             tooltip = f"Punto {p['point_num']} – sin datos"
         else:
-            fill = cmap(opv99) if cmap is not None else "#1f77b4"
+            fill = cmap(ndvi_val) if cmap is not None else "#1f77b4"
             fill_opacity = 0.55
             tooltip = f"Punto {p['point_num']}"
-
         folium.CircleMarker(
             location=[p["lat"], p["lon"]],
             radius=15, color="white", weight=2,
@@ -311,6 +406,42 @@ def _build_map(
             ),
             interactive=False,
         ).add_to(fmap)
+
+    # Reposition and shrink the branca colormap legend so it doesn't block the
+    # map view, especially on mobile screens.
+    legend_css = """
+    <style>
+        .leaflet-container svg.legend {
+            position: absolute !important;
+            left: 50% !important;
+            bottom: 8px !important;
+            top: auto !important;
+            right: auto !important;
+            transform: translateX(-50%) !important;
+            background: rgba(255, 255, 255, 0.92) !important;
+            border-radius: 6px !important;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.25) !important;
+            padding: 2px 6px !important;
+            max-width: 92vw !important;
+            width: 320px !important;
+            height: 50px !important;
+            z-index: 500 !important;
+        }
+        .leaflet-container svg.legend text {
+            font-size: 10px !important;
+        }
+        @media (max-width: 600px) {
+            .leaflet-container svg.legend {
+                width: 88vw !important;
+                height: 44px !important;
+            }
+            .leaflet-container svg.legend text {
+                font-size: 9px !important;
+            }
+        }
+    </style>
+    """
+    fmap.get_root().add_child(folium.Element(legend_css))  # type: ignore[attr-defined]
     return fmap
 
 
@@ -431,12 +562,20 @@ def render_mobile() -> None:
         st.stop()
     points = hpc["points"]
 
+    base_date = _latest_zip_date(field_name)
+    month_options = [_prospective_month_label(base_date, i) for i in range(N_MONTHS)]
+    if base_date is not None:
+        st.caption(
+            f"📅 Predicción a partir de la última fecha de datos: "
+            f"**{base_date.day:02d} {_ES_MONTH_NUM_TO_ABBR[base_date.month]} {base_date.year}**"
+        )
+
     month_label = st.selectbox(
         "Seleccionar Mes",
-        [f"Mes {i + 1}" for i in range(N_MONTHS)],
+        month_options,
         key="month_selector",
     )
-    month_idx = int(month_label.split()[1]) - 1
+    month_idx = month_options.index(month_label)
 
     manual_df = _load_manual_risks(manual_fn, points)
     selection_state_key = f"selected_point_{field_name}_{indice}_{anio}"
@@ -486,7 +625,7 @@ def render_mobile() -> None:
         if not nearest["available"] or month_data.get("opvar99_usd") is None:
             st.info("Sin datos prospectivos HPC para este punto/mes.")
         else:
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
             col1.metric(
                 "Mean (USD)",
                 f"{month_data['mean_usd']:,.2f}" if month_data.get("mean_usd") is not None else "—",
@@ -496,10 +635,12 @@ def render_mobile() -> None:
                 f"{month_data['p75_usd']:,.2f}" if month_data.get("p75_usd") is not None else "—",
             )
             col3.metric("OpVar-99% (USD)", f"{month_data['opvar99_usd']:,.2f}")
-            col4, col5, col6 = st.columns(3)
-            col4.metric("%C1", f"{month_data['pc1']:.3f}" if month_data.get("pc1") is not None else "—")
-            col5.metric("%C2", f"{month_data['pc2']:.3f}" if month_data.get("pc2") is not None else "—")
-            col6.metric("%C3", f"{month_data['pc3']:.3f}" if month_data.get("pc3") is not None else "—")
+            col4.metric("NDVI", f"{month_data['ndvi']:.3f}" if month_data.get("ndvi") is not None else "—")
+            col5, col6, col7, col8 = st.columns(4)
+            col5.metric("%C1", f"{month_data['pc1']:.3f}" if month_data.get("pc1") is not None else "—")
+            col6.metric("%C2", f"{month_data['pc2']:.3f}" if month_data.get("pc2") is not None else "—")
+            col7.metric("%C3", f"{month_data['pc3']:.3f}" if month_data.get("pc3") is not None else "—")
+            col8.empty()
 
         st.markdown(f"**Riesgo guardado actual:** {current_nuevo_int}")
         new_riesgo = st.selectbox(
