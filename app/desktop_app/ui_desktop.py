@@ -700,8 +700,54 @@ def _responsive_css() -> None:
               display: none !important;
           }
           
+          /* Keep Streamlit's top header transparent but interactive so the
+             sidebar expand button (which lives inside it in newer versions)
+             remains clickable. We previously hid it entirely, which removed
+             the only way to reopen a collapsed sidebar without reloading. */
           [data-testid="stHeader"] {
+              background: transparent !important;
+              height: auto !important;
+              min-height: 0 !important;
+              pointer-events: none; /* let clicks pass through empty header area */
+          }
+          [data-testid="stHeader"] * {
+              pointer-events: auto;
+          }
+          /* Hide just the decorative toolbar items, not the whole header. */
+          [data-testid="stToolbar"],
+          [data-testid="stDecoration"],
+          [data-testid="stStatusWidget"] {
               display: none !important;
+          }
+
+          /* Keep the collapsed-sidebar reopen button visible and pinned to the
+             top-right (since the sidebar itself is positioned on the right).
+             Covers selectors used across Streamlit versions. */
+          [data-testid="stSidebarCollapsedControl"],
+          [data-testid="collapsedControl"],
+          [data-testid="stExpandSidebarButton"],
+          button[kind="header"][aria-label*="sidebar" i],
+          button[aria-label*="Open sidebar" i],
+          button[aria-label*="Expand sidebar" i] {
+              display: flex !important;
+              visibility: visible !important;
+              opacity: 1 !important;
+              position: fixed !important;
+              top: 8px !important;
+              right: 8px !important;
+              left: auto !important;
+              z-index: 1001 !important;
+              background: var(--surface-color, #ffffff) !important;
+              border: 1px solid var(--border-color, #e0e0e0) !important;
+              border-radius: 6px !important;
+              box-shadow: 0 2px 6px rgba(0,0,0,0.15) !important;
+              padding: 4px !important;
+              pointer-events: auto !important;
+          }
+          [data-testid="stSidebarCollapsedControl"] svg,
+          [data-testid="collapsedControl"] svg,
+          [data-testid="stExpandSidebarButton"] svg {
+              transform: scaleX(-1); /* point chevron toward the right-side sidebar */
           }
           
           /* Accessibility Improvements */
@@ -933,6 +979,74 @@ def render_ui() -> None:
                     }, { capture: true });
                 } catch(err) {}
             });
+        })();
+        </script>
+        """,
+        height=0,
+    )
+
+    # Always-visible custom toggle button injected into the parent Streamlit
+    # document. Works even when Streamlit's built-in expand button is hidden
+    # or its selector changes between versions.
+    components.html(
+        """
+        <script>
+        (function() {
+            try {
+                var topDoc = window.top.document;
+                if (topDoc.getElementById('custom-sidebar-toggle')) return;
+
+                var btn = topDoc.createElement('button');
+                btn.id = 'custom-sidebar-toggle';
+                btn.title = 'Mostrar/ocultar barra lateral';
+                btn.innerHTML = '☰';
+                btn.style.cssText = [
+                    'position:fixed',
+                    'top:10px',
+                    'right:10px',
+                    'z-index:2147483647',
+                    'width:40px',
+                    'height:40px',
+                    'border-radius:8px',
+                    'border:1px solid #d0d0d0',
+                    'background:#ffffff',
+                    'color:#222',
+                    'font-size:20px',
+                    'font-weight:bold',
+                    'cursor:pointer',
+                    'box-shadow:0 2px 8px rgba(0,0,0,0.2)',
+                    'display:flex',
+                    'align-items:center',
+                    'justify-content:center',
+                    'padding:0'
+                ].join(';');
+
+                btn.addEventListener('click', function() {
+                    var sb = topDoc.querySelector('[data-testid="stSidebar"]');
+                    if (!sb) return;
+                    // Try Streamlit's own buttons first (handles state correctly)
+                    var clickTargets = [
+                        '[data-testid="stSidebarCollapseButton"] button',
+                        '[data-testid="stSidebarCollapsedControl"] button',
+                        '[data-testid="stExpandSidebarButton"]',
+                        '[data-testid="collapsedControl"] button',
+                        '[aria-label*="sidebar" i]'
+                    ];
+                    for (var i = 0; i < clickTargets.length; i++) {
+                        var el = topDoc.querySelector(clickTargets[i]);
+                        if (el) { el.click(); return; }
+                    }
+                    // Fallback: toggle visibility via inline style
+                    var hidden = sb.getAttribute('aria-expanded') === 'false'
+                              || sb.style.display === 'none'
+                              || sb.offsetWidth === 0;
+                    sb.style.display = hidden ? '' : 'none';
+                });
+
+                topDoc.body.appendChild(btn);
+            } catch (e) {
+                console.warn('custom-sidebar-toggle inject failed', e);
+            }
         })();
         </script>
         """,

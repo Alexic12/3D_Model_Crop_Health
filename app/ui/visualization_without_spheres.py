@@ -460,7 +460,7 @@ def create_2d_scatter_plot_ndvi_interactive_qgis(
         # 8.1) Annotate points
         indices_sorted = sorted(range(len(x_plot)), key=lambda i: (-y_plot[i], x_plot[i]))
         y_offset = -0.015 * (lat_max_adj - lat_min_adj)
-        for order, idx in enumerate(indices_sorted, start=1):
+        for order, idx in enumerate(indices_sorted, start=0):
             ax.text(
                 x_plot[idx], y_plot[idx] + y_offset,
                 str(order),
