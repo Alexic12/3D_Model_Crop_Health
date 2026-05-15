@@ -108,18 +108,38 @@ def _latest_processed_year(field_name, indice, assets_folder="assets/data"):
     if not field_name or not indice:
         return None
 
-    field_dir = os.path.join(assets_folder, field_name)
-    if not os.path.isdir(field_dir):
-        return None
+    field_dirs = [
+        os.path.join(assets_folder, field_name),
+        os.path.join(assets_folder, field_name.replace(" ", "_")),
+    ]
 
     years = []
     pattern = re.compile(rf"^INFORME_{re.escape(indice)}_(?:IDW|QGIS|Espacial)_(\d{{4}})\.xlsx$", re.IGNORECASE)
-    for filename in os.listdir(field_dir):
-        match = pattern.match(filename)
-        if match:
-            years.append(int(match.group(1)))
+    for field_dir in dict.fromkeys(field_dirs):
+        if not os.path.isdir(field_dir):
+            continue
+        for filename in os.listdir(field_dir):
+            match = pattern.match(filename)
+            if match:
+                years.append(int(match.group(1)))
 
     return str(max(years)) if years else None
+
+
+def _processed_qgis_candidates(field_name, indice, anio, assets_folder="assets/data"):
+    filename = f"INFORME_{indice}_QGIS_{anio}.xlsx"
+    candidates = []
+    if field_name:
+        candidates.extend([
+            os.path.join(assets_folder, field_name, filename),
+            os.path.join(assets_folder, field_name.replace(" ", "_"), filename),
+        ])
+    candidates.append(os.path.join(assets_folder, filename))
+    return list(dict.fromkeys(candidates))
+
+
+def _processed_qgis_exists(field_name, indice, anio):
+    return any(os.path.exists(path) for path in _processed_qgis_candidates(field_name, indice, anio))
 
 
 @st.cache_data(show_spinner=False, max_entries=12)
@@ -1911,7 +1931,33 @@ def render_ui() -> None:
                         safe_field_name = field_name.replace(' ', '_')
                         field_base_folder = os.path.join("./upload_data", safe_field_name)
                     else:
+                        safe_field_name = None
                         field_base_folder = "./upload_data"
+
+                    if not _processed_qgis_exists(safe_field_name or field_name, indice, anio):
+                        qgis_candidates = _processed_qgis_candidates(safe_field_name or field_name, indice, anio)
+                        latest_qgis_year = _latest_processed_year(safe_field_name or field_name, indice)
+                        st.error(
+                            "No se encontró el archivo QGIS procesado requerido para ejecutar HPC "
+                            f"en el año {anio}."
+                        )
+                        st.info(
+                            "Rutas revisadas:\n\n"
+                            + "\n".join(f"- `{path}`" for path in qgis_candidates)
+                        )
+                        if latest_qgis_year and latest_qgis_year != anio:
+                            st.warning(
+                                f"Hay datos procesados para el año {latest_qgis_year}. "
+                                f"Cambia el campo Año a {latest_qgis_year} o ejecuta primero "
+                                f"el análisis masivo para {anio}."
+                            )
+                        else:
+                            st.warning(
+                                "Ejecuta primero `Ejecutar Análisis Masivo` para generar "
+                                "los archivos QGIS/IDW/Espacial de este campo y año."
+                            )
+                        st.stop()
+
                     st.markdown("### Progreso del Pipeline HPC")
                     hpc_progress_bar = st.progress(0)
                     hpc_progress_status = st.empty()

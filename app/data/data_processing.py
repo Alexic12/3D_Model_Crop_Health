@@ -1279,11 +1279,17 @@ def run_full_hpc_pipeline(indice: str, anio: str, base_folder: str = "./upload_d
             ydmes[i,:] = ydpar[idx,:]
 
     # QGIS - use field-based path structure
-    field_name = os.path.basename(base_folder)
-    qgis_path = os.path.join("assets", "data", field_name, f"INFORME_{indice}_QGIS_{anio}.xlsx")
-    if not os.path.exists(qgis_path):
-        # Fallback to old structure
-        qgis_path = os.path.join("assets", "data", f"INFORME_{indice}_QGIS_{anio}.xlsx")
+    field_name = os.path.basename(os.path.normpath(base_folder))
+    qgis_filename = f"INFORME_{indice}_QGIS_{anio}.xlsx"
+    qgis_candidates = []
+    if field_name and field_name not in {".", "upload_data"}:
+        qgis_candidates.extend([
+            os.path.join("assets", "data", field_name, qgis_filename),
+            os.path.join("assets", "data", field_name.replace(" ", "_"), qgis_filename),
+        ])
+    qgis_candidates.append(os.path.join("assets", "data", qgis_filename))
+    qgis_candidates = list(dict.fromkeys(qgis_candidates))
+    qgis_path = next((path for path in qgis_candidates if os.path.exists(path)), qgis_candidates[-1])
     
     # Debug: show what files exist
     logger.info(f"Looking for QGIS file: {qgis_path}")
@@ -1297,13 +1303,14 @@ def run_full_hpc_pipeline(indice: str, anio: str, base_folder: str = "./upload_d
             logger.info(f"Files in assets/data: {all_files}")
     
     if not os.path.exists(qgis_path):
-        logger.error(f"QGIS not found => {qgis_path}")
+        checked_paths = "\n".join(f"- {path}" for path in qgis_candidates)
+        logger.error("QGIS not found. Checked paths:\n%s", checked_paths)
         _notify_progress(
             progress_callback,
             stage="error",
             completed=0,
             total=1,
-            message=f"Archivo QGIS no encontrado: {qgis_path}",
+            message=f"Archivo QGIS no encontrado para {anio}. Rutas revisadas: {', '.join(qgis_candidates)}",
         )
         return None
 
