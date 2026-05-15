@@ -1992,6 +1992,7 @@ def render_ui() -> None:
                             indice,
                             anio,
                             base_folder=field_base_folder,
+                            field_name=safe_field_name,
                             progress_callback=update_hpc_progress,
                         )
                     if hpc_data is None:

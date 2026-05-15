@@ -1117,7 +1117,13 @@ def Prospectiva(i1, XD, XCr, V, aTr, bEm, ydmes):
     return np.array(VC), XInf, XLDA
 
 
-def run_full_hpc_pipeline(indice: str, anio: str, base_folder: str = "./upload_data", progress_callback=None):
+def run_full_hpc_pipeline(
+    indice: str,
+    anio: str,
+    base_folder: str = "./upload_data",
+    progress_callback=None,
+    field_name: str | None = None,
+):
     """
     1) Read & invert => 'Clima_{indice}_{anio}_O.xlsx'
     2) Filter 'Fuente de datos' != '-' 
@@ -1279,13 +1285,13 @@ def run_full_hpc_pipeline(indice: str, anio: str, base_folder: str = "./upload_d
             ydmes[i,:] = ydpar[idx,:]
 
     # QGIS - use field-based path structure
-    field_name = os.path.basename(os.path.normpath(base_folder))
+    resolved_field_name = field_name or os.path.basename(os.path.normpath(base_folder))
     qgis_filename = f"INFORME_{indice}_QGIS_{anio}.xlsx"
     qgis_candidates = []
-    if field_name and field_name not in {".", "upload_data"}:
+    if resolved_field_name and resolved_field_name not in {".", "upload_data"}:
         qgis_candidates.extend([
-            os.path.join("assets", "data", field_name, qgis_filename),
-            os.path.join("assets", "data", field_name.replace(" ", "_"), qgis_filename),
+            os.path.join("assets", "data", resolved_field_name, qgis_filename),
+            os.path.join("assets", "data", resolved_field_name.replace(" ", "_"), qgis_filename),
         ])
     qgis_candidates.append(os.path.join("assets", "data", qgis_filename))
     qgis_candidates = list(dict.fromkeys(qgis_candidates))
@@ -1295,9 +1301,9 @@ def run_full_hpc_pipeline(indice: str, anio: str, base_folder: str = "./upload_d
     logger.info(f"Looking for QGIS file: {qgis_path}")
     assets_dir = os.path.join("assets", "data")
     if os.path.exists(assets_dir):
-        if field_name and os.path.exists(os.path.join(assets_dir, field_name)):
-            field_files = os.listdir(os.path.join(assets_dir, field_name))
-            logger.info(f"Files in assets/data/{field_name}: {field_files}")
+        if resolved_field_name and os.path.exists(os.path.join(assets_dir, resolved_field_name)):
+            field_files = os.listdir(os.path.join(assets_dir, resolved_field_name))
+            logger.info(f"Files in assets/data/{resolved_field_name}: {field_files}")
         else:
             all_files = os.listdir(assets_dir)
             logger.info(f"Files in assets/data: {all_files}")
