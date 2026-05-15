@@ -990,6 +990,17 @@ def MatricesTransicion(XD, XD3, n_var, punto):
         return None, None, None, None, None
 
 
+def _scalar_float(value, default=np.nan):
+    """Return a Python float from scalar-like NumPy/Pandas values."""
+    arr = np.asarray(value)
+    if arr.size == 0:
+        return float(default)
+    try:
+        return float(arr.reshape(-1)[0])
+    except (TypeError, ValueError):
+        return float(default)
+
+
 def Prospectiva(i1, XD, XCr, V, aTr, bEm, ydmes):
     """
     Replicates your Jupyter HPC approach:
@@ -1007,8 +1018,8 @@ def Prospectiva(i1, XD, XCr, V, aTr, bEm, ydmes):
     inr= np.zeros(n_components)
     for j in range(n_components):
         ccount = (XCr==j).sum()
-        nC[j]  = ccount/len(LDA)
-        inr[j] = nC[j]
+        nC[j, 0] = ccount/len(LDA)
+        inr[j] = nC[j, 0]
 
     # build HPC arrays
     XLDA = np.zeros((1000, V.shape[1]))
@@ -1020,10 +1031,10 @@ def Prospectiva(i1, XD, XCr, V, aTr, bEm, ydmes):
     XInf[0, 2] = ydmes[0,2]
     XInf[0, 3] = ydmes[0,3]
     XInf[0, 4] = ydmes[0,4]
-    XInf[0, 5] = np.round(skewfunc(LDA),3)
-    XInf[0, 6] = np.round(nC[0]+nC[1],3)
-    XInf[0, 7] = np.round(nC[2]+nC[3],3)
-    XInf[0, 8] = np.round(nC[4],3)
+    XInf[0, 5] = np.round(_scalar_float(skewfunc(LDA)),3)
+    XInf[0, 6] = np.round(_scalar_float(nC[0, 0] + nC[1, 0]),3)
+    XInf[0, 7] = np.round(_scalar_float(nC[2, 0] + nC[3, 0]),3)
+    XInf[0, 8] = np.round(_scalar_float(nC[4, 0]),3)
     XInf[0, 9] = np.round(LDA.mean(),3)
     XInf[0,10] = np.round(np.percentile(LDA,75),3)
     XInf[0,11] = np.round(np.percentile(LDA,99),3)
@@ -1055,7 +1066,7 @@ def Prospectiva(i1, XD, XCr, V, aTr, bEm, ydmes):
         for i2 in range(NDm[k2]):
             m1 += 1
             # factor=2*sigma
-            XLDA[m1, 0] = (0.8+0.4*random.random())*np.random.normal(mmu, 2*ssig)
+            XLDA[m1, 0] = _scalar_float((0.8+0.4*random.random())*np.random.normal(mmu, 2*ssig))
 
     # fill row=1 => HPC stats
     XInf[1,0] = ydmes[0,0]
@@ -1063,10 +1074,10 @@ def Prospectiva(i1, XD, XCr, V, aTr, bEm, ydmes):
     XInf[1,2] = ydmes[0,2]
     XInf[1,3] = ydmes[0,3]
     XInf[1,4] = ydmes[0,4]
-    XInf[1,5] = np.round(skewfunc(XLDA[:,0]),3)
-    XInf[1,6] = np.round(alpha[0,0]+alpha[0,1],3)
-    XInf[1,7] = np.round(alpha[0,2]+alpha[0,3],3)
-    XInf[1,8] = np.round(alpha[0,4],3)
+    XInf[1,5] = np.round(_scalar_float(skewfunc(XLDA[:,0])),3)
+    XInf[1,6] = np.round(_scalar_float(alpha[0,0]+alpha[0,1]),3)
+    XInf[1,7] = np.round(_scalar_float(alpha[0,2]+alpha[0,3]),3)
+    XInf[1,8] = np.round(_scalar_float(alpha[0,4]),3)
     XInf[1,9] = np.round(XLDA[:,0].mean(),3)
     XInf[1,10]= np.round(np.percentile(XLDA[:,0],75),3)
     XInf[1,11]= np.round(np.percentile(XLDA[:,0],99),3)
@@ -1088,17 +1099,17 @@ def Prospectiva(i1, XD, XCr, V, aTr, bEm, ydmes):
             for i2 in range(NDm[k2]):
                 m1 += 1
                 # factor=1*sigma
-                XLDA[m1, t] = (0.9 + 0.2*random.random())*np.random.normal(mmu, ssig)
+                XLDA[m1, t] = _scalar_float((0.9 + 0.2*random.random())*np.random.normal(mmu, ssig))
 
         XInf[t,0]  = ydmes[t,0]
         XInf[t,1]  = ydmes[t,1]
         XInf[t,2]  = ydmes[t,2]
         XInf[t,3]  = ydmes[t,3]
         XInf[t,4]  = ydmes[t,4]
-        XInf[t,5]  = np.round(skewfunc(XLDA[:,t-1]),3)
-        XInf[t,6]  = np.round(alpha[t,0]+alpha[t,1],3)
-        XInf[t,7]  = np.round(alpha[t,2]+alpha[t,3],3)
-        XInf[t,8]  = np.round(alpha[t,4],3)
+        XInf[t,5]  = np.round(_scalar_float(skewfunc(XLDA[:,t-1])),3)
+        XInf[t,6]  = np.round(_scalar_float(alpha[t,0]+alpha[t,1]),3)
+        XInf[t,7]  = np.round(_scalar_float(alpha[t,2]+alpha[t,3]),3)
+        XInf[t,8]  = np.round(_scalar_float(alpha[t,4]),3)
         XInf[t,9]  = np.round(XLDA[:,t-1].mean(),3)
         XInf[t,10] = np.round(np.percentile(XLDA[:,t-1],75),3)
         XInf[t,11] = np.round(np.percentile(XLDA[:,t-1],99),3)
@@ -1328,8 +1339,35 @@ def run_full_hpc_pipeline(indice: str, anio: str, base_folder: str = "./upload_d
     n_sheets = len(array_hojas)
     total_points = 25  # 5x5
     XD3 = np.empty((n_sheets, total_points, 5), dtype=float)
-    for iSheet, hoja_np in enumerate(array_hojas):
-        XD3[iSheet,:,:] = hoja_np
+    for iSheet, df_sheet in enumerate(XDB3.values()):
+        numeric_sheet = df_sheet.apply(pd.to_numeric, errors="coerce")
+        if numeric_sheet.shape[0] < total_points or numeric_sheet.shape[1] < 5:
+            logger.error(
+                "QGIS sheet %s has invalid shape %s; expected at least (%s, 5).",
+                sheet_names[iSheet],
+                numeric_sheet.shape,
+                total_points,
+            )
+            _notify_progress(
+                progress_callback,
+                stage="error",
+                completed=0,
+                total=1,
+                message=f"Hoja QGIS inválida: {sheet_names[iSheet]} tiene forma {numeric_sheet.shape}; se esperan 25 filas y 5 columnas.",
+            )
+            return None
+        sheet_values = numeric_sheet.iloc[:total_points, :5].to_numpy(dtype=float)
+        if not np.isfinite(sheet_values).all():
+            logger.error("QGIS sheet %s contains non-numeric or missing values in the first 25x5 block.", sheet_names[iSheet])
+            _notify_progress(
+                progress_callback,
+                stage="error",
+                completed=0,
+                total=1,
+                message=f"Hoja QGIS inválida: {sheet_names[iSheet]} contiene valores no numéricos o vacíos.",
+            )
+            return None
+        XD3[iSheet, :, :] = sheet_values
 
     # HPC => loop
     results = []
@@ -1342,51 +1380,63 @@ def run_full_hpc_pipeline(indice: str, anio: str, base_folder: str = "./upload_d
             message=f"Simulando punto {iPoint + 1}/{total_points}...",
             point_index=iPoint,
         )
-        # build aTr, bEm
-        aTr, bEm, XCr, lonp, latp = MatricesTransicion(XD, XD3, n_var, iPoint)
-        if aTr is None or bEm is None:
-            logger.warning(f"Point={iPoint}, HPC => skip.")
+        try:
+            # build aTr, bEm
+            aTr, bEm, XCr, lonp, latp = MatricesTransicion(XD, XD3, n_var, iPoint)
+            if aTr is None or bEm is None:
+                logger.warning(f"Point={iPoint}, HPC => skip.")
+                _notify_progress(
+                    progress_callback,
+                    stage="points",
+                    completed=iPoint + 1,
+                    total=total_points,
+                    message=f"Punto {iPoint + 1}/{total_points} omitido.",
+                    point_index=iPoint,
+                )
+                continue
+
+            # HPC => Prospectiva
+            VC, XInf, XLDA = Prospectiva(iPoint, XD, XCr, V, aTr, bEm, ydmes)
+
+            # in your notebook => scale from col=1.. 
+            #   e.g. XLDA[:,k]*=PRef
+            #   PRef => user input => * (1-0.7)
+            PRef = 100.0
+            eff_pref = PRef*(1-0.7)  # => 30
+            for k in range(1, V.shape[1]):
+                XLDA[:,k]*= eff_pref
+            logger.debug("XLDA shape for point %s: %s", iPoint, XLDA.shape)
+            # rewrite columns 9..11 => MPerd
+            # oldv => XInf[row, col], do => eff_pref / abs(1 - oldv)
+            XInf2 = XInf.copy()
+            for row_i in range(V.shape[1]):
+                for col_j in [9,10,11]:
+                    oldv = XInf2[row_i, col_j]
+                    val  = 0.0
+                    if not np.isnan(oldv) and not np.isinf(oldv):
+                        val = eff_pref/abs(1 - oldv)
+                    XInf2[row_i, col_j] = val
+
+            info = {
+                "point_idx": iPoint,
+                "VC": VC,
+                "lon": lonp,
+                "lat": latp,
+                "XInf": XInf2,
+                "XLDA": XLDA,
+            }
+            results.append(info)
+        except Exception as exc:
+            logger.exception("Point=%s HPC failed.", iPoint)
             _notify_progress(
                 progress_callback,
                 stage="points",
                 completed=iPoint + 1,
                 total=total_points,
-                message=f"Punto {iPoint + 1}/{total_points} omitido.",
+                message=f"Punto {iPoint + 1}/{total_points} falló: {exc}",
                 point_index=iPoint,
             )
             continue
-
-        # HPC => Prospectiva
-        VC, XInf, XLDA = Prospectiva(iPoint, XD, XCr, V, aTr, bEm, ydmes)
-
-        # in your notebook => scale from col=1.. 
-        #   e.g. XLDA[:,k]*=PRef
-        #   PRef => user input => * (1-0.7)
-        PRef = 100.0
-        eff_pref = PRef*(1-0.7)  # => 30
-        for k in range(1, V.shape[1]):
-            XLDA[:,k]*= eff_pref
-        print(f"XLDA DEBUG: {XLDA}")
-        # rewrite columns 9..11 => MPerd
-        # oldv => XInf[row, col], do => eff_pref / abs(1 - oldv)
-        XInf2 = XInf.copy()
-        for row_i in range(V.shape[1]):
-            for col_j in [9,10,11]:
-                oldv = XInf2[row_i, col_j]
-                val  = 0.0
-                if not np.isnan(oldv) and not np.isinf(oldv):
-                    val = eff_pref/abs(1 - oldv)
-                XInf2[row_i, col_j] = val
-
-        info = {
-            "point_idx": iPoint,
-            "VC": VC,
-            "lon": lonp,
-            "lat": latp,
-            "XInf": XInf2,
-            "XLDA": XLDA,
-        }
-        results.append(info)
         _notify_progress(
             progress_callback,
             stage="points",

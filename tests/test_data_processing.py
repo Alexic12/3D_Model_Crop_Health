@@ -14,6 +14,7 @@ from app.data.data_processing import (
     bulk_unzip_and_analyze_new_parallel,
     rejilla_indice,
     _resolve_bulk_worker_count,
+    Prospectiva,
 )
 
 def test_process_uploaded_file_valid_data():
@@ -155,3 +156,29 @@ def test_bulk_worker_count_uses_more_than_legacy_two_when_safe(monkeypatch):
     monkeypatch.setattr("app.data.data_processing._available_memory_gb", lambda: 32)
 
     assert _resolve_bulk_worker_count(20) > 2
+
+
+def test_prospectiva_handles_scalar_like_numpy_arrays():
+    rows = 30
+    xd = pd.DataFrame(
+        {
+            "MaxC": np.linspace(20, 30, rows),
+            "MinC": np.linspace(10, 18, rows),
+            "Viento": np.linspace(1, 5, rows),
+            "Humedad": np.linspace(40, 80, rows),
+            "Precip": np.linspace(0, 20, rows),
+            "NDVI": np.linspace(0.25, 0.85, rows),
+        }
+    )
+    xcr = (np.arange(rows) % 5).reshape(-1, 1)
+    v = np.zeros((5, 12), dtype=int)
+    a_tr = np.full((5, 5), 0.2)
+    b_em = np.full((5, 5, 5), 0.2)
+    ydmes = np.ones((12, 5), dtype=float)
+
+    vc, xinf, xlda = Prospectiva(0, xd, xcr, v, a_tr, b_em, ydmes)
+
+    assert vc.shape == (12,)
+    assert xinf.shape == (12, 12)
+    assert xlda.shape == (1000, 12)
+    assert np.issubdtype(xinf.dtype, np.floating)
