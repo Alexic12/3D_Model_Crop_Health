@@ -1,11 +1,11 @@
 import sys
+import os
 import requests
 from PyQt5.QtWidgets import QApplication, QWidget, QLabel, QLineEdit, QPushButton, QVBoxLayout, QHBoxLayout
 from PyQt5.QtGui import QPixmap
 from io import BytesIO
 
-# Google Maps API Key (Replace with your key)
-API_KEY = "AIzaSyB1Vv2XMsTy1AxEowrzOaI5Sn96ffC6HNY"
+API_KEY = os.getenv("GOOGLE_MAPS_API_KEY") or os.getenv("CHV_GOOGLE_MAPS_API_KEY")
 
 class MapViewer(QWidget):
     def __init__(self):
@@ -59,6 +59,10 @@ class MapViewer(QWidget):
     
     def fetch_map(self):
         try:
+            if not API_KEY:
+                self.image_label.setText("Set GOOGLE_MAPS_API_KEY before loading a map.")
+                return
+
             min_lat = float(self.min_lat_input.text())
             max_lat = float(self.max_lat_input.text())
             min_lon = float(self.min_lon_input.text())

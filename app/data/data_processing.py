@@ -2,9 +2,11 @@ import os
 import zipfile
 import logging
 import datetime
+import ctypes
 import numpy as np
 import pandas as pd
 import rasterio
+from dataclasses import dataclass
 from pyproj import Transformer
 from scipy.interpolate import griddata
 from scipy.ndimage import gaussian_filter
@@ -17,17 +19,125 @@ import multiprocessing     # To get CPU count
 from openpyxl import load_workbook, Workbook
 from openpyxl.utils.exceptions import InvalidFileException
 from sklearn.cluster import KMeans
-import tensorflow as tf
-from keras.models import Sequential
-from keras.layers import Dense, Dropout
-from keras.regularizers import l2
-from keras.callbacks import EarlyStopping
 
 
 logger = logging.getLogger(__name__)
 n_components=5
 n_var=5
 titulos=['Máx grado C','Mín grado C','Viento (m/s)','Humedad (%)','Precipitaciones (mm)']
+
+_BULK_THREAD_ENV_VARS = (
+    "OMP_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+)
+
+
+@dataclass(frozen=True)
+class BulkRasterTask:
+    k_val: int
+    base_path: str
+    color_path: str
+    sheet_name: str
+
+
+def _available_memory_gb():
+    """Best-effort available RAM in GB without adding a psutil dependency."""
+    if os.name == "nt":
+        class MEMORYSTATUSEX(ctypes.Structure):
+            _fields_ = [
+                ("dwLength", ctypes.c_ulong),
+                ("dwMemoryLoad", ctypes.c_ulong),
+                ("ullTotalPhys", ctypes.c_ulonglong),
+                ("ullAvailPhys", ctypes.c_ulonglong),
+                ("ullTotalPageFile", ctypes.c_ulonglong),
+                ("ullAvailPageFile", ctypes.c_ulonglong),
+                ("ullTotalVirtual", ctypes.c_ulonglong),
+                ("ullAvailVirtual", ctypes.c_ulonglong),
+                ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+            ]
+
+        status = MEMORYSTATUSEX()
+        status.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)):
+            return status.ullAvailPhys / (1024 ** 3)
+        return None
+
+    try:
+        pages = os.sysconf("SC_AVPHYS_PAGES")
+        page_size = os.sysconf("SC_PAGE_SIZE")
+        return pages * page_size / (1024 ** 3)
+    except (AttributeError, ValueError, OSError):
+        return None
+
+
+def _env_int(name, default=None):
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+        return value if value > 0 else default
+    except ValueError:
+        logger.warning("Ignoring invalid %s=%r; expected a positive integer.", name, raw)
+        return default
+
+
+def _env_float(name, default):
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+        return value if value > 0 else default
+    except ValueError:
+        logger.warning("Ignoring invalid %s=%r; expected a positive number.", name, raw)
+        return default
+
+
+def _resolve_bulk_worker_count(task_count):
+    """Choose a worker count that scales up but avoids saturating weak machines."""
+    if task_count <= 0:
+        return 0
+
+    explicit = _env_int("CHV_BULK_WORKERS")
+    if explicit:
+        return max(1, min(task_count, explicit))
+
+    cpu_count = multiprocessing.cpu_count()
+    cpu_limit = max(1, cpu_count - 1) if cpu_count > 2 else 1
+
+    available_gb = _available_memory_gb()
+    if available_gb is None:
+        memory_limit = cpu_limit
+    else:
+        per_worker_gb = _env_float("CHV_BULK_MEMORY_PER_WORKER_GB", 1.25)
+        reserved_gb = _env_float("CHV_BULK_RESERVED_MEMORY_GB", 2.0)
+        usable_gb = max(0.5, available_gb - reserved_gb)
+        memory_limit = max(1, int(usable_gb / max(per_worker_gb, 0.25)))
+
+    max_workers = _env_int("CHV_BULK_MAX_WORKERS")
+    limits = [task_count, cpu_limit, memory_limit]
+    if max_workers:
+        limits.append(max_workers)
+    return max(1, min(limits))
+
+
+def _prepare_bulk_child_environment():
+    """Prevent BLAS/OpenMP oversubscription inside process workers."""
+    for name in _BULK_THREAD_ENV_VARS:
+        os.environ.setdefault(name, "1")
+
+
+def _notify_progress(progress_callback, **event):
+    if progress_callback is None:
+        return
+    try:
+        progress_callback(event)
+    except Exception:
+        logger.exception("Bulk progress callback failed.")
 
 
 def process_uploaded_file(uploaded_file):
@@ -41,6 +151,10 @@ def process_uploaded_file(uploaded_file):
         required = ["Longitud", "Latitud", "NDVI"]
         if not all(c in df.columns for c in required):
             st.error("Excel must contain columns: Longitud, Latitud, NDVI (Riesgo optional).")
+            return None
+        ndvi_values = pd.to_numeric(df["NDVI"], errors="coerce")
+        if ndvi_values.isna().any() or not ndvi_values.between(-1, 1).all():
+            st.error("NDVI values must be numeric and between -1 and 1.")
             return None
         return df
     except Exception as e:
@@ -61,7 +175,7 @@ def load_timeseries_data(uploaded_file):
         sheet_names = excel_obj.sheet_names
         data_sheets = {}
         for sname in sheet_names:
-            df = pd.read_excel(uploaded_file, sheet_name=sname, header=None)
+            df = excel_obj.parse(sheet_name=sname, header=None)
             if df.shape[0] < 3 or df.shape[1] < 2:
                 continue
             # First row => skip the first column, read rest as lon
@@ -106,43 +220,34 @@ def rejilla_indice(ruta_imagen, ruta_color):
     Returns a DataFrame with columns:
         [UTM-x, UTM-y, longitud, latitud, col, row, NDVI].
     """
-    from PIL import Image
     try:
         logger.info(f"[rejilla_indice] Processing base='{ruta_imagen}', color='{ruta_color}'")
-        color_img = Image.open(ruta_color)
-        pixels = color_img.load()
-
-        xm = []
-        ym = []
-        latm = []
-        lonm = []
-        colm = []
-        rowm = []
-        NDVI = []
+        if not os.path.exists(ruta_color):
+            logger.warning("[rejilla_indice] Color map file does not exist: %s", ruta_color)
+            return None
 
         with rasterio.open(ruta_imagen) as src:
-            band1 = src.read(1)
+            band1 = src.read(1, masked=True)
             crs = src.crs
             logger.debug(f"[rejilla_indice] CRS={crs}, shape=({src.height}, {src.width})")
-            no_data_value = src.nodata if src.nodata is not None else -9999
-            band1 = np.where(band1 == no_data_value, np.nan, band1)
+            if crs is None:
+                logger.warning("[rejilla_indice] Missing CRS in %s", ruta_imagen)
+                return None
+
+            band_data = band1.filled(np.nan).astype(float)
+            valid_mask = np.isfinite(band_data)
+            if not valid_mask.any():
+                logger.warning("[rejilla_indice] No valid pixels in %s", ruta_imagen)
+                return pd.DataFrame(columns=["UTM-x", "UTM-y", "longitud", "latitud", "col", "row", "NDVI"])
+
+            rowm, colm = np.nonzero(valid_mask)
+            ndvi_values = band_data[rowm, colm].astype(float)
 
             transformer = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
-
-            for r_i in range(src.height):
-                for c_i in range(src.width):
-                    ndvi_val = band1[r_i, c_i]
-                    if np.isnan(ndvi_val):
-                        continue
-                    x, y = src.xy(r_i, c_i)
-                    lon, lat = transformer.transform(x, y)
-                    xm.append(x)
-                    ym.append(y)
-                    latm.append(lat)
-                    lonm.append(lon)
-                    colm.append(c_i)
-                    rowm.append(r_i)
-                    NDVI.append(float(ndvi_val))
+            xm, ym = rasterio.transform.xy(src.transform, rowm, colm, offset="center")
+            xm = np.asarray(xm, dtype=float)
+            ym = np.asarray(ym, dtype=float)
+            lonm, latm = transformer.transform(xm, ym)
 
         df = pd.DataFrame({
             "UTM-x": xm,
@@ -151,7 +256,7 @@ def rejilla_indice(ruta_imagen, ruta_color):
             "latitud": latm,
             "col": colm,
             "row": rowm,
-            "NDVI": NDVI
+            "NDVI": ndvi_values
         })
         logger.info(f"[rejilla_indice] Created DataFrame with {len(df)} points.")
         return df
@@ -293,80 +398,129 @@ def extract_date_from_filename(filename):
     return None
 
 
-def _process_one_k(k_val, folder_path, colorMap_keyword, XC_list):
+def _build_bulk_tasks(folder_path, colorMap_keyword):
+    """Index ZIP/TIFF pairs once in the parent process."""
+    import re
+
+    all_files = os.listdir(folder_path)
+    tiff_files = [f for f in all_files if f.lower().endswith((".tif", ".tiff"))]
+    zip_files = [f for f in all_files if f.lower().endswith(".zip")]
+    tasks = []
+    max_k = 0
+
+    for zip_file in sorted(zip_files):
+        prefix_match = re.match(r"^(\d{3})\.", zip_file)
+        if prefix_match:
+            k_val = int(prefix_match.group(1))
+            max_k = max(max_k, k_val)
+        elif zip_file[:3].isdigit():
+            k_val = int(zip_file[:3])
+            max_k = max(max_k, k_val)
+        else:
+            logger.warning("[bulk index] ZIP has no numeric prefix => %s", zip_file)
+            continue
+
+        date_str = extract_date_from_filename(zip_file)
+        if not date_str:
+            logger.warning("[bulk index] ZIP has no supported date token => %s", zip_file)
+            continue
+
+        matching_tiffs = [f for f in tiff_files if date_str.lower() in f.lower()]
+        color_file = next(
+            (f for f in matching_tiffs if colorMap_keyword.lower() in f.lower()),
+            None,
+        )
+        base_file = next(
+            (f for f in matching_tiffs if colorMap_keyword.lower() not in f.lower()),
+            None,
+        )
+        if not base_file or not color_file:
+            logger.warning("[bulk index] k=%s missing TIFF pair for date=%s", k_val, date_str)
+            continue
+
+        sheet_name = extract_date_from_filename(base_file) or f"{str(k_val).zfill(3)}_data"
+        tasks.append(BulkRasterTask(
+            k_val=k_val,
+            base_path=os.path.join(folder_path, base_file),
+            color_path=os.path.join(folder_path, color_file),
+            sheet_name=sheet_name,
+        ))
+
+    tasks.sort(key=lambda task: task.k_val)
+    return tasks, max_k, all_files
+
+
+def _process_one_k(task, XC_list):
     """
     Function for parallel execution: Rejilla + IDW + Riesgo for a single prefix K.
     Returns (k_val, sheet_name, df_espacial, df_idw, df_qgis).
     """
-    import re
-    logger.info(f"[_process_one_k] Worker starts for k={k_val}")
-    k_str = str(k_val).zfill(3)
-    base_file, color_file = None, None
+    logger.info(f"[_process_one_k] Worker starts for k={task.k_val}")
+    logger.info(
+        "[_process_one_k] k=%s, base='%s', color='%s', sheet='%s'",
+        task.k_val,
+        os.path.basename(task.base_path),
+        os.path.basename(task.color_path),
+        task.sheet_name,
+    )
 
-    # Find the TIFF pair for this k_val - improved matching
-    all_files = os.listdir(folder_path)
-    tiff_files = [f for f in all_files if f.lower().endswith('.tiff')]
-    zip_files = [f for f in all_files if f.lower().endswith('.zip')]
-    
-    # Find matching ZIP file with more flexible pattern
-    matching_zip = None
-    for zf in zip_files:
-        # Match patterns like "001. Campo_Luna_Roja_NDVI_01ene2022.zip"
-        zip_pattern = rf'^{k_str}\.\s*.*\.zip$'
-        if re.match(zip_pattern, zf, re.IGNORECASE):
-            matching_zip = zf
-            logger.info(f"[_process_one_k] Found matching ZIP: {matching_zip}")
-            break
-    
-    if matching_zip:
-        # Extract date from ZIP filename with improved pattern
-        date_match = re.search(r'(\d{1,2}(?:ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)\d{4})', matching_zip, re.IGNORECASE)
-        if date_match:
-            date_str = date_match.group(1)
-            logger.info(f"[_process_one_k] Extracted date: {date_str}")
-            
-            # Find corresponding TIFF files
-            for fname in tiff_files:
-                if date_str.lower() in fname.lower():
-                    if colorMap_keyword.lower() in fname.lower():
-                        color_file = fname
-                        logger.info(f"[_process_one_k] Found color file: {color_file}")
-                    else:
-                        base_file = fname
-                        logger.info(f"[_process_one_k] Found base file: {base_file}")
-
-    if not base_file or not color_file:
-        logger.warning(f"[_process_one_k] k={k_val} => No valid pair => skipping.")
-        return (k_val, None, None, None, None)
-
-    sheet_name = extract_date_from_filename(base_file)
-    if not sheet_name:
-        sheet_name = f"{k_str}_data"
-
-    base_path = os.path.join(folder_path, base_file)
-    color_path = os.path.join(folder_path, color_file)
-    logger.info(f"[_process_one_k] k={k_val}, base='{base_file}', color='{color_file}', sheet='{sheet_name}'")
-
-    df_esp = rejilla_indice(base_path, color_path)
+    df_esp = rejilla_indice(task.base_path, task.color_path)
     if df_esp is None or df_esp.empty:
-        logger.warning(f"[_process_one_k] k={k_val} => No data in df_esp => skipping.")
-        return (k_val, sheet_name, None, None, None)
+        logger.warning(f"[_process_one_k] k={task.k_val} => No data in df_esp => skipping.")
+        return (task.k_val, task.sheet_name, None, None, None)
 
     df_idw, df_idw_2 = _idw_index_core(df_esp)  # IDW
     if df_idw is None or df_idw_2 is None:
-        logger.warning(f"[_process_one_k] k={k_val} => IDW failed => partial data.")
-        return (k_val, sheet_name, df_esp, None, None)
+        logger.warning(f"[_process_one_k] k={task.k_val} => IDW failed => partial data.")
+        return (task.k_val, task.sheet_name, df_esp, None, None)
 
     # Convert back to numpy array
     XC = np.array(XC_list)
     df_qgis, _ = _riesgo(df_idw_2, XC.copy())
 
-    logger.info(f"[_process_one_k] k={k_val} => success => returning data (sheet='{sheet_name}')")
-    return (k_val, sheet_name, df_esp, df_idw, df_qgis)
+    logger.info(f"[_process_one_k] k={task.k_val} => success => returning data (sheet='{task.sheet_name}')")
+    return (task.k_val, task.sheet_name, df_esp, df_idw, df_qgis)
+
+
+def _safe_excel_sheet_name(sheet_name):
+    invalid_chars = set('[]:*?/\\')
+    clean = "".join("_" if char in invalid_chars else char for char in str(sheet_name))
+    return (clean or "Sheet")[:31]
+
+
+def _unique_sheet_name(sheet_name, used_names):
+    base = _safe_excel_sheet_name(sheet_name)
+    candidate = base
+    counter = 1
+    while candidate in used_names:
+        suffix = f"_{counter}"
+        candidate = f"{base[:31 - len(suffix)]}{suffix}"
+        counter += 1
+    used_names.add(candidate)
+    return candidate
+
+
+def _close_bulk_writers(writers):
+    for writer in writers.values():
+        writer.close()
+
+
+def _write_bulk_result(result, paths, writers, used_sheet_names):
+    _k_val, sheet_name, df_esp, df_idw, df_qgis = result
+    if not sheet_name or df_esp is None:
+        return
+
+    sheet = _unique_sheet_name(sheet_name, used_sheet_names)
+    for key, df in (("espacial", df_esp), ("idw", df_idw), ("qgis", df_qgis)):
+        if df is None:
+            continue
+        if key not in writers:
+            writers[key] = pd.ExcelWriter(paths[key], mode="w", engine="openpyxl")
+        df.to_excel(writers[key], index=False, sheet_name=sheet)
 
 
 def bulk_unzip_and_analyze_new_parallel(
-    indice, anio, base_folder="./upload_data", colorMap_keyword="ColorMap"
+    indice, anio, base_folder="./upload_data", colorMap_keyword="ColorMap", progress_callback=None
 ):
     """
     Main bulk analysis pipeline:
@@ -383,7 +537,15 @@ def bulk_unzip_and_analyze_new_parallel(
         logger.info(f"[bulk_unzip_and_analyze_new_parallel] Created folder_path='{folder_path}'")
 
     # 1) Unzip all .zip in folder_path
-    for file_ in os.listdir(folder_path):
+    zip_candidates = [file_ for file_ in os.listdir(folder_path) if file_.lower().endswith(".zip")]
+    _notify_progress(
+        progress_callback,
+        stage="extract",
+        completed=0,
+        total=max(len(zip_candidates), 1),
+        message=f"Extrayendo {len(zip_candidates)} archivo(s) ZIP...",
+    )
+    for idx, file_ in enumerate(zip_candidates, start=1):
         if file_.lower().endswith(".zip"):
             zip_path = os.path.join(folder_path, file_)
             logger.info(f"[bulk_unzip_and_analyze_new_parallel] Unzipping => {zip_path}")
@@ -393,9 +555,31 @@ def bulk_unzip_and_analyze_new_parallel(
                 # (commented out because your naming might differ)
                 # prefix = file_[0:5]
                 # nlist = zf.namelist()
+            _notify_progress(
+                progress_callback,
+                stage="extract",
+                completed=idx,
+                total=max(len(zip_candidates), 1),
+                message=f"ZIP extraído: {file_}",
+            )
 
     # 2) Gather color map .tiff
-    all_files = os.listdir(folder_path)
+    _notify_progress(
+        progress_callback,
+        stage="index",
+        completed=0,
+        total=1,
+        message="Indexando pares TIFF para análisis...",
+    )
+    tasks, max_k, all_files = _build_bulk_tasks(folder_path, colorMap_keyword)
+    _notify_progress(
+        progress_callback,
+        stage="index",
+        completed=1,
+        total=1,
+        message=f"{len(tasks)} par(es) TIFF listo(s) para procesar.",
+        task_total=len(tasks),
+    )
     logger.info(f"[bulk_unzip_and_analyze_new_parallel] All files in {folder_path}: {all_files}")
     
     color_files = [
@@ -462,31 +646,17 @@ def bulk_unzip_and_analyze_new_parallel(
             logger.info(f"[bulk_unzip_and_analyze_new_parallel] Removing old {path_}")
             os.remove(path_)
 
-    # 3) Identify max K by prefix from ZIP files
-    import re
-    max_k = 0
+    # 3) Validate indexed ZIP/TIFF pairs
     zip_files = [f for f in all_files if f.lower().endswith('.zip')]
     logger.info(f"[bulk_unzip_and_analyze_new_parallel] ZIP files: {zip_files}")
-    
-    for f in zip_files:
-        try:
-            # Look for numeric prefix patterns: "001.", "002.", etc.
-            match = re.match(r'^(\d{3})\.', f)
-            if match:
-                k_ = int(match.group(1))
-                if k_ > max_k:
-                    max_k = k_
-            else:
-                # Fallback: try first 3 characters if they're digits
-                if f[:3].isdigit():
-                    k_ = int(f[:3])
-                    if k_ > max_k:
-                        max_k = k_
-        except:
-            pass
     logger.info(f"[bulk_unzip_and_analyze_new_parallel] Computed max_k={max_k}")
     if max_k == 0:
-        warn_msg = "No numeric prefixes found in colorMap files (like '001')."
+        warn_msg = "No numeric prefixes found in ZIP files (like '001.')."
+        logger.warning(warn_msg)
+        st.warning(warn_msg)
+        return None, None, None
+    if not tasks:
+        warn_msg = "No valid ZIP/TIFF pairs were found for bulk analysis."
         logger.warning(warn_msg)
         st.warning(warn_msg)
         return None, None, None
@@ -495,55 +665,155 @@ def bulk_unzip_and_analyze_new_parallel(
     XC = np.sort(np.random.uniform(0, 1, 5))
     logger.info(f"[bulk_unzip_and_analyze_new_parallel] Initial cluster seeds (XC)={XC}")
 
-    # 4) Create tasks for k in [1..max_k]
-    tasks = range(1, max_k+1)
-
-    # 5) Process in smaller batches to avoid memory issues with large datasets
-    batch_size = 20  # Process 20 files at a time
-    max_workers = min(2, multiprocessing.cpu_count())  # Reduce workers for large datasets
-    logger.info(f"[bulk_unzip_and_analyze_new_parallel] Processing {len(tasks)} files in batches of {batch_size} with {max_workers} workers")
+    # 4) Process in adaptive batches to use available local compute safely.
+    max_workers = _resolve_bulk_worker_count(len(tasks))
+    batch_size = max(4, max_workers * 2)
+    executor_kind = os.getenv("CHV_BULK_EXECUTOR", "process").strip().lower()
+    if executor_kind not in {"process", "thread", "serial"}:
+        logger.warning("Invalid CHV_BULK_EXECUTOR=%r; using process.", executor_kind)
+        executor_kind = "process"
+    if max_workers == 1:
+        executor_kind = "serial"
+    if executor_kind == "process":
+        _prepare_bulk_child_environment()
+    logger.info(
+        "[bulk_unzip_and_analyze_new_parallel] Processing %s valid files in batches of %s with %s %s worker(s)",
+        len(tasks),
+        batch_size,
+        max_workers,
+        executor_kind,
+    )
+    _notify_progress(
+        progress_callback,
+        stage="process",
+        completed=0,
+        total=len(tasks),
+        message=f"Procesando {len(tasks)} imagen(es) con {max_workers} worker(s) ({executor_kind})...",
+        workers=max_workers,
+        executor=executor_kind,
+    )
     
     results = []
     XC_list = XC.tolist()
+    paths = {
+        "espacial": espacial_xlsx,
+        "idw": idw_xlsx,
+        "qgis": qgis_xlsx,
+    }
+    writers = {}
+    used_sheet_names = set()
+    completed_tasks = 0
     
     # Process in batches
-    for batch_start in range(0, len(tasks), batch_size):
-        batch_end = min(batch_start + batch_size, len(tasks))
-        batch_tasks = tasks[batch_start:batch_end]
-        logger.info(f"[bulk_unzip_and_analyze_new_parallel] Processing batch {batch_start//batch_size + 1}: files {batch_start+1}-{batch_end}")
-        
-        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-            future_map = {
-                executor.submit(_process_one_k, k_val, folder_path, colorMap_keyword, XC_list): k_val
-                for k_val in batch_tasks
-            }
-            for future in concurrent.futures.as_completed(future_map):
-                k_val = future_map[future]
-                try:
-                    res = future.result(timeout=300)  # 5 minute timeout per file
-                    logger.info(f"[bulk_unzip_and_analyze_new_parallel] Completed k={k_val}")
-                    results.append(res)
-                    
-                    # Write results immediately to avoid memory buildup
-                    k_val, sheet_name, df_esp, df_idw, df_qgis = res
-                    if sheet_name and df_esp is not None:
-                        save_df_to_excel(espacial_xlsx, df_esp, sheet_name)
-                        if df_idw is not None:
-                            save_df_to_excel(idw_xlsx, df_idw, sheet_name)
-                        if df_qgis is not None:
-                            save_df_to_excel(qgis_xlsx, df_qgis, sheet_name)
-                        # Clear dataframes from memory
-                        del df_esp, df_idw, df_qgis
-                        
-                except concurrent.futures.TimeoutError:
-                    logger.error(f"[bulk_unzip_and_analyze_new_parallel] Task for K={k_val} timed out")
-                except Exception as e:
-                    logger.exception(f"[bulk_unzip_and_analyze_new_parallel] Task for K={k_val} failed: {e}")
+    try:
+        for batch_start in range(0, len(tasks), batch_size):
+            batch_end = min(batch_start + batch_size, len(tasks))
+            batch_tasks = tasks[batch_start:batch_end]
+            logger.info(
+                "[bulk_unzip_and_analyze_new_parallel] Processing batch %s: files %s-%s",
+                batch_start // batch_size + 1,
+                batch_start + 1,
+                batch_end,
+            )
+
+            if executor_kind == "serial":
+                for task in batch_tasks:
+                    try:
+                        res = _process_one_k(task, XC_list)
+                        logger.info(f"[bulk_unzip_and_analyze_new_parallel] Completed k={task.k_val}")
+                        results.append(res)
+                        _write_bulk_result(res, paths, writers, used_sheet_names)
+                        completed_tasks += 1
+                        _notify_progress(
+                            progress_callback,
+                            stage="process",
+                            completed=completed_tasks,
+                            total=len(tasks),
+                            message=f"Procesado {completed_tasks}/{len(tasks)}: {task.sheet_name}",
+                            k_val=task.k_val,
+                            sheet_name=task.sheet_name,
+                        )
+                    except Exception as e:
+                        logger.exception(f"[bulk_unzip_and_analyze_new_parallel] Task for K={task.k_val} failed: {e}")
+                        completed_tasks += 1
+                        _notify_progress(
+                            progress_callback,
+                            stage="process",
+                            completed=completed_tasks,
+                            total=len(tasks),
+                            message=f"Error en K={task.k_val}; continuando con el siguiente archivo.",
+                            k_val=task.k_val,
+                            error=str(e),
+                        )
+                continue
+
+            executor_cls = (
+                concurrent.futures.ProcessPoolExecutor
+                if executor_kind == "process"
+                else concurrent.futures.ThreadPoolExecutor
+            )
+            with executor_cls(max_workers=max_workers) as executor:
+                future_map = {
+                    executor.submit(_process_one_k, task, XC_list): task.k_val
+                    for task in batch_tasks
+                }
+                for future in concurrent.futures.as_completed(future_map):
+                    k_val = future_map[future]
+                    try:
+                        res = future.result()
+                        logger.info(f"[bulk_unzip_and_analyze_new_parallel] Completed k={k_val}")
+                        results.append(res)
+                        _write_bulk_result(res, paths, writers, used_sheet_names)
+                        completed_tasks += 1
+                        _notify_progress(
+                            progress_callback,
+                            stage="process",
+                            completed=completed_tasks,
+                            total=len(tasks),
+                            message=f"Procesado {completed_tasks}/{len(tasks)}: K={k_val}",
+                            k_val=k_val,
+                        )
+                    except Exception as e:
+                        logger.exception(f"[bulk_unzip_and_analyze_new_parallel] Task for K={k_val} failed: {e}")
+                        completed_tasks += 1
+                        _notify_progress(
+                            progress_callback,
+                            stage="process",
+                            completed=completed_tasks,
+                            total=len(tasks),
+                            message=f"Error en K={k_val}; continuando con el siguiente archivo.",
+                            k_val=k_val,
+                            error=str(e),
+                        )
+    finally:
+        _notify_progress(
+            progress_callback,
+            stage="write",
+            completed=0,
+            total=1,
+            message="Guardando libros Excel finales...",
+        )
+        _close_bulk_writers(writers)
+        _notify_progress(
+            progress_callback,
+            stage="write",
+            completed=1,
+            total=1,
+            message="Libros Excel guardados.",
+        )
 
     # Results already written during processing to avoid memory issues
     logger.info(f"[bulk_unzip_and_analyze_new_parallel] Completed processing {len(results)} files for field '{field_name}'")
 
     logger.info("[bulk_unzip_and_analyze_new_parallel] Done.")
+    _notify_progress(
+        progress_callback,
+        stage="done",
+        completed=len(tasks),
+        total=len(tasks),
+        message=f"Análisis masivo completado: {len(results)}/{len(tasks)} archivo(s) procesado(s).",
+        successful=len(results),
+    )
     return (espacial_xlsx, idw_xlsx, qgis_xlsx)
 
 
@@ -560,6 +830,11 @@ def Emision(i2, XDe, NIT, NR):
       - MLP => skip last 360 => forecast => classify => Vp1, Vp2
     """
     try:
+        from keras.models import Sequential
+        from keras.layers import Dense, Dropout
+        from keras.regularizers import l2
+        from keras.callbacks import EarlyStopping
+
         XDe = pd.Series(XDe).astype(float).values
         if len(XDe) < 400:
             return None, None, None, None
@@ -831,7 +1106,7 @@ def Prospectiva(i1, XD, XCr, V, aTr, bEm, ydmes):
     return np.array(VC), XInf, XLDA
 
 
-def run_full_hpc_pipeline(indice:str, anio:str, base_folder:str="./upload_data"):
+def run_full_hpc_pipeline(indice: str, anio: str, base_folder: str = "./upload_data", progress_callback=None):
     """
     1) Read & invert => 'Clima_{indice}_{anio}_O.xlsx'
     2) Filter 'Fuente de datos' != '-' 
@@ -839,6 +1114,16 @@ def run_full_hpc_pipeline(indice:str, anio:str, base_folder:str="./upload_data")
     4) Build V => Emision => ydmes
     5) Read QGIS => build HPC
     """
+    import tensorflow as tf
+
+    _notify_progress(
+        progress_callback,
+        stage="start",
+        completed=0,
+        total=1,
+        message="Inicializando pipeline HPC...",
+    )
+
     random.seed(123)
     np.random.seed(123)
     tf.random.set_seed(123)
@@ -856,6 +1141,13 @@ def run_full_hpc_pipeline(indice:str, anio:str, base_folder:str="./upload_data")
         logger.info(f"Files in {folder_path}: {files}")
     else:
         logger.error(f"Folder does not exist: {folder_path}")
+        _notify_progress(
+            progress_callback,
+            stage="error",
+            completed=0,
+            total=1,
+            message=f"No existe la carpeta de entrada: {folder_path}",
+        )
         return None
         
     if not os.path.exists(clima_xlsx):
@@ -883,6 +1175,14 @@ def run_full_hpc_pipeline(indice:str, anio:str, base_folder:str="./upload_data")
         os.makedirs(folder_path, exist_ok=True)
         df_mock.to_excel(clima_xlsx, index=False)
         logger.info(f"Created mock climate file: {clima_xlsx}")
+
+    _notify_progress(
+        progress_callback,
+        stage="climate",
+        completed=0,
+        total=1,
+        message="Preparando datos climáticos...",
+    )
 
     # invert
     dfc = pd.read_excel(clima_xlsx)
@@ -913,7 +1213,21 @@ def run_full_hpc_pipeline(indice:str, anio:str, base_folder:str="./upload_data")
     XD2 = XD2.apply(pd.to_numeric, errors='coerce').dropna(how='all')
     if len(XD) < 1:
         logger.error("No climate data => skip HPC.")
+        _notify_progress(
+            progress_callback,
+            stage="error",
+            completed=0,
+            total=1,
+            message="No hay datos climáticos válidos para el pipeline HPC.",
+        )
         return None
+    _notify_progress(
+        progress_callback,
+        stage="climate",
+        completed=1,
+        total=1,
+        message="Datos climáticos listos.",
+    )
 
     # 2) Build V => Emision for each var=0..4 (the climate columns). NDVI is index=5
     n_var  = 5
@@ -921,6 +1235,14 @@ def run_full_hpc_pipeline(indice:str, anio:str, base_folder:str="./upload_data")
     ydpar  = np.zeros((360, n_var), dtype=float)
 
     for i in range(n_var):
+        _notify_progress(
+            progress_callback,
+            stage="emission",
+            completed=i,
+            total=n_var,
+            message=f"Entrenando modelo de emisión {i + 1}/{n_var}...",
+            variable_index=i,
+        )
         # e.g. i=0 => 'MaxC', i=1 => 'MinC', ...
         XDe = XD2.iloc[:, i].values
         Vp1, Vp2, yp, _ = Emision(i, XDe, 500, 4)
@@ -929,6 +1251,14 @@ def run_full_hpc_pipeline(indice:str, anio:str, base_folder:str="./upload_data")
             continue
         V[i,:]     = Vp2.flatten()
         ydpar[:,i] = yp.flatten()
+        _notify_progress(
+            progress_callback,
+            stage="emission",
+            completed=i + 1,
+            total=n_var,
+            message=f"Modelo de emisión {i + 1}/{n_var} completado.",
+            variable_index=i,
+        )
 
     # build ydmes => shape(12,5)
     ydmes = np.zeros((12, n_var))
@@ -957,14 +1287,42 @@ def run_full_hpc_pipeline(indice:str, anio:str, base_folder:str="./upload_data")
     
     if not os.path.exists(qgis_path):
         logger.error(f"QGIS not found => {qgis_path}")
+        _notify_progress(
+            progress_callback,
+            stage="error",
+            completed=0,
+            total=1,
+            message=f"Archivo QGIS no encontrado: {qgis_path}",
+        )
         return None
 
+    _notify_progress(
+        progress_callback,
+        stage="qgis",
+        completed=0,
+        total=1,
+        message="Cargando datos QGIS para simulación prospectiva...",
+    )
     XDB3 = pd.read_excel(qgis_path, sheet_name=None)
     sheet_names = list(XDB3.keys())
     array_hojas = [df_.values for df_ in XDB3.values()]
     if len(array_hojas)<1:
         logger.error("No sheets in QGIS => skip HPC.")
+        _notify_progress(
+            progress_callback,
+            stage="error",
+            completed=0,
+            total=1,
+            message="El archivo QGIS no contiene hojas válidas.",
+        )
         return None
+    _notify_progress(
+        progress_callback,
+        stage="qgis",
+        completed=1,
+        total=1,
+        message=f"QGIS cargado: {len(array_hojas)} hoja(s).",
+    )
 
     # each => shape(25,5)
     n_sheets = len(array_hojas)
@@ -976,10 +1334,26 @@ def run_full_hpc_pipeline(indice:str, anio:str, base_folder:str="./upload_data")
     # HPC => loop
     results = []
     for iPoint in range(total_points):
+        _notify_progress(
+            progress_callback,
+            stage="points",
+            completed=iPoint,
+            total=total_points,
+            message=f"Simulando punto {iPoint + 1}/{total_points}...",
+            point_index=iPoint,
+        )
         # build aTr, bEm
         aTr, bEm, XCr, lonp, latp = MatricesTransicion(XD, XD3, n_var, iPoint)
         if aTr is None or bEm is None:
             logger.warning(f"Point={iPoint}, HPC => skip.")
+            _notify_progress(
+                progress_callback,
+                stage="points",
+                completed=iPoint + 1,
+                total=total_points,
+                message=f"Punto {iPoint + 1}/{total_points} omitido.",
+                point_index=iPoint,
+            )
             continue
 
         # HPC => Prospectiva
@@ -1013,6 +1387,14 @@ def run_full_hpc_pipeline(indice:str, anio:str, base_folder:str="./upload_data")
             "XLDA": XLDA,
         }
         results.append(info)
+        _notify_progress(
+            progress_callback,
+            stage="points",
+            completed=iPoint + 1,
+            total=total_points,
+            message=f"Punto {iPoint + 1}/{total_points} completado.",
+            point_index=iPoint,
+        )
 
     hpc_data = {
         "V": V,
@@ -1020,4 +1402,12 @@ def run_full_hpc_pipeline(indice:str, anio:str, base_folder:str="./upload_data")
         "results": results,
         "using_mock_data": using_mock_data
     }
+    _notify_progress(
+        progress_callback,
+        stage="done",
+        completed=total_points,
+        total=total_points,
+        message=f"Pipeline HPC completado: {len(results)}/{total_points} punto(s) procesado(s).",
+        successful=len(results),
+    )
     return hpc_data

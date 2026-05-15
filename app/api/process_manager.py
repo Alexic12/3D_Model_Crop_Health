@@ -44,6 +44,7 @@ class ProcessManager:
                 cmd = [
                     sys.executable, "-m", "streamlit", "run", spec.script,
                     "--server.port", str(spec.port),
+                    "--server.address", "0.0.0.0",
                     "--server.headless", "true",
                     "--browser.gatherUsageStats", "false"
                 ]
@@ -64,6 +65,11 @@ class ProcessManager:
             if spec.proc and spec.proc.poll() is None:
                 logger.info(f"🛑 Terminating {spec.name}")
                 spec.proc.terminate()
+                try:
+                    spec.proc.wait(timeout=10)
+                except subprocess.TimeoutExpired:
+                    logger.warning(f"⚠️ Force killing unresponsive {spec.name}")
+                    spec.proc.kill()
 
 def build_default_manager() -> ProcessManager:
     return ProcessManager()

@@ -1,6 +1,10 @@
 @echo off
 REM Activate virtual environment
-call venv\Scripts\activate
+if exist .venv\Scripts\activate (
+    call .venv\Scripts\activate
+) else if exist venv\Scripts\activate (
+    call venv\Scripts\activate
+)
 
-REM Run the Streamlit app
-streamlit run app\main.py
+REM Run the FastAPI gateway, which supervises the Streamlit workers
+python run_app.py

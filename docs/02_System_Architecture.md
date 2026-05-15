@@ -412,7 +412,7 @@ class Settings(BaseSettings):
     API_PORT: int = 8000
     
     # External Services
-    GOOGLE_MAPS_API_KEY: str = "AIzaSyB1Vv2XMsTy1AxEowrzOaI5Sn96ffC6HNY"
+    GOOGLE_MAPS_API_KEY: str = ""
     
     # Performance
     LOG_LEVEL: str = "INFO"

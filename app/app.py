@@ -16,12 +16,14 @@ import subprocess
 import sys
 from pathlib import Path
 
+from app.config.config import settings
+
 def is_windows() -> bool:
     return platform.system().lower() == "windows"
 
 def run_uvicorn():
     # Set PYTHONPATH so "from app.api.main" works
-    base_dir = Path(__file__).resolve().parent
+    base_dir = Path(__file__).resolve().parent.parent
     env = os.environ.copy()
     env["PYTHONPATH"] = str(base_dir)
 
@@ -30,13 +32,13 @@ def run_uvicorn():
         sys.executable,
         "-m", "uvicorn",
         "app.api.main:app",
-        "--host", "0.0.0.0",
-        "--port", "8000",
+        "--host", settings.API_HOST,
+        "--port", str(settings.API_PORT),
         "--reload"
     ]
 
-    print("🚀 Starting FastAPI gateway on http://localhost:8000")
-    print("📡 Redirects: /desktop → 8501 | /mobile → 8502")
+    print(f"🚀 Starting FastAPI gateway on http://localhost:{settings.API_PORT}")
+    print(f"📡 Redirects: /desktop → {settings.DESKTOP_PORT} | /mobile → {settings.MOBILE_PORT}")
     print("🧠 Streamlit workers auto-managed by ProcessManager\n")
 
     try:

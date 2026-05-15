@@ -11,6 +11,9 @@ from __future__ import annotations
 
 import logging
 import os
+import base64
+import re
+from io import BytesIO
 
 import numpy as np
 import pandas as pd
@@ -49,6 +52,266 @@ from app.ui.visualization import (
 )
 
 logger = logging.getLogger(__name__)
+TIME_ANIMATION_RENDER_VERSION = 2
+PROCESSED_VIZ_MAP_WIDTH_PX = 700
+PROCESSED_VIZ_IMAGE_WIDTH_PX = 430
+PROCESSED_VIZ_GAP_PX = 32
+PROCESSED_VIZ_ROW_WIDTH_PX = PROCESSED_VIZ_MAP_WIDTH_PX + PROCESSED_VIZ_IMAGE_WIDTH_PX + PROCESSED_VIZ_GAP_PX
+
+_YEAR_TOKEN_RE = re.compile(r"(?:\d{1,2}(?:ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic))?(\d{4})", re.IGNORECASE)
+
+
+def _file_mtime(path):
+    try:
+        return os.path.getmtime(path)
+    except OSError:
+        return 0.0
+
+
+def _latest_loaded_image_year(field_name, base_folder="./upload_data"):
+    """Return the latest year detected for images/ZIPs loaded under a field."""
+    if not field_name:
+        return None
+
+    candidates = [
+        os.path.join(base_folder, field_name),
+        os.path.join(base_folder, field_name.replace(" ", "_")),
+    ]
+    years = []
+    seen = set()
+
+    for field_path in candidates:
+        if field_path in seen:
+            continue
+        seen.add(field_path)
+        if not os.path.isdir(field_path):
+            continue
+
+        for root, dirs, files in os.walk(field_path):
+            for dirname in dirs:
+                if dirname.isdigit() and len(dirname) == 4:
+                    years.append(int(dirname))
+
+            for filename in files:
+                lower = filename.lower()
+                if not lower.endswith((".zip", ".tif", ".tiff", ".xlsx", ".xls")):
+                    continue
+                match = _YEAR_TOKEN_RE.search(filename)
+                if match:
+                    years.append(int(match.group(1)))
+
+    return str(max(years)) if years else None
+
+
+def _latest_processed_year(field_name, indice, assets_folder="assets/data"):
+    """Return the latest year with processed IDW/QGIS outputs for a field."""
+    if not field_name or not indice:
+        return None
+
+    field_dir = os.path.join(assets_folder, field_name)
+    if not os.path.isdir(field_dir):
+        return None
+
+    years = []
+    pattern = re.compile(rf"^INFORME_{re.escape(indice)}_(?:IDW|QGIS|Espacial)_(\d{{4}})\.xlsx$", re.IGNORECASE)
+    for filename in os.listdir(field_dir):
+        match = pattern.match(filename)
+        if match:
+            years.append(int(match.group(1)))
+
+    return str(max(years)) if years else None
+
+
+@st.cache_data(show_spinner=False, max_entries=12)
+def cached_timeseries_data(path, mtime):
+    return load_timeseries_data(path)
+
+
+@st.cache_data(show_spinner=False, max_entries=24)
+def cached_excel_sheet_names(path, mtime):
+    return pd.ExcelFile(path).sheet_names
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def cached_excel_sheet(path, sheet_name, mtime):
+    return pd.read_excel(path, sheet_name=sheet_name)
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def cached_qgis_html(path, sheet_name, mtime, google_api_key, margin_frac=0.05):
+    df_qgis = pd.read_excel(path, sheet_name=sheet_name)
+    return create_2d_scatter_plot_ndvi_interactive_qgis(
+        qgis_df=df_qgis,
+        sheet_name=sheet_name,
+        google_api_key=google_api_key,
+        margin_frac=margin_frac,
+    )
+
+
+def _qgis_component_height(google_api_key):
+    # The no-key Leaflet/Esri map is aspect-ratio constrained; a 700px iframe
+    # leaves a blank strip under the map. Keep the legacy height for Google/MPLD3.
+    return 700 if google_api_key else 500
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def cached_colormap_image_html(image_path, mtime, sheet_name):
+    from PIL import Image
+
+    img = Image.open(image_path)
+    min_display_width = 800
+    if img.width < min_display_width:
+        scale = min_display_width // img.width + 1
+        img = img.resize((img.width * scale, img.height * scale), Image.NEAREST)
+
+    buffer = BytesIO()
+    img.save(buffer, format="PNG")
+    img_b64 = base64.b64encode(buffer.getvalue()).decode()
+
+    return f"""
+    <html><body style="margin:0; padding:0; overflow:hidden; background:transparent;">
+    <div style="display:flex; flex-direction:column; align-items:flex-start;
+                justify-content:flex-start; width:100%;
+                box-sizing:border-box; padding:44px 0 0 0;">
+        <img src="data:image/png;base64,{img_b64}"
+             style="display:block; width:100%; max-width:{PROCESSED_VIZ_IMAGE_WIDTH_PX}px; height:auto;
+                    border-radius:8px;
+                    box-shadow:0 2px 8px rgba(0,0,0,0.15);" />
+        <p style="text-align:center; width:100%; max-width:{PROCESSED_VIZ_IMAGE_WIDTH_PX}px; margin-top:8px; color:#666;
+                  font-family:sans-serif; font-size:14px;">
+            NDVI ColorMap - {sheet_name}
+        </p>
+    </div>
+    <script>
+    (function() {{
+        var targets = [document];
+        try {{ if (window.parent && window.parent.document) targets.push(window.parent.document); }} catch(e) {{}}
+        try {{ if (window.top && window.top.document) targets.push(window.top.document); }} catch(e) {{}}
+        targets.forEach(function(doc) {{
+            doc.addEventListener('wheel', function(e) {{
+                if (e.ctrlKey || e.metaKey) {{
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    return false;
+                }}
+            }}, {{ passive: false, capture: true }});
+            doc.addEventListener('keydown', function(e) {{
+                if ((e.ctrlKey || e.metaKey) && (e.key==='+' || e.key==='-' || e.key==='=' || e.key==='0')) {{
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    return false;
+                }}
+            }}, {{ capture: true }});
+        }});
+    }})();
+    </script>
+    </body></html>
+    """
+
+
+@st.cache_data(show_spinner=False, max_entries=12)
+def cached_time_animation_html(path, mtime, grid_size, color_map, z_scale, smoothness, steps_value, render_version):
+    data_sheets = load_timeseries_data(path)
+    if not data_sheets:
+        return None
+    fig_time = create_3d_simulation_plot_time_interpolation(
+        data_sheets, grid_size, color_map, z_scale, smoothness, steps_value,
+        frame_duration=200,
+    )
+    if not fig_time:
+        return None
+    fig_time.update_layout(
+        margin=dict(l=0, r=0, t=30, b=100),
+        paper_bgcolor='rgba(0,0,0,0)',
+        plot_bgcolor='rgba(0,0,0,0)',
+        autosize=True,
+        width=None,
+        height=900,
+    )
+
+    import json as _json
+    import plotly.io as pio
+
+    chart_html = pio.to_html(
+        fig_time, include_plotlyjs='cdn', full_html=False,
+        config={'scrollZoom': False},
+        auto_play=False,
+    )
+    frame_names_json = _json.dumps([f.name for f in fig_time.frames])
+    return f"""
+    <style>
+        html, body {{
+            margin: 0; padding: 0;
+            background: transparent !important;
+            overflow: hidden;
+        }}
+        .speed-control {{
+            display: flex; align-items: center; justify-content: center;
+            gap: 14px; padding: 8px 0 4px 0; font-family: sans-serif;
+        }}
+        .speed-control label {{
+            color: #ccc; font-size: 14px; white-space: nowrap;
+        }}
+        .speed-control input[type=range] {{
+            width: 260px; accent-color: #4682B4; cursor: pointer;
+        }}
+        .speed-control .speed-val {{
+            color: #4682B4; font-weight: bold; font-size: 14px;
+            min-width: 55px; text-align: center;
+        }}
+        .js-plotly-plot,
+        .plotly-graph-div,
+        .plot-container,
+        .svg-container {{
+            margin: 0 auto !important;
+            width: 100% !important;
+            max-width: 100% !important;
+        }}
+    </style>
+    <div class="speed-control">
+        <label>Velocidad:</label>
+        <span style="color:#aaa;font-size:12px;">Rápido</span>
+        <input type="range" id="jsSpeedSlider" min="30" max="800" value="200" step="10">
+        <span style="color:#aaa;font-size:12px;">Lento</span>
+        <span class="speed-val" id="jsSpeedVal">200 ms</span>
+    </div>
+    {chart_html}
+    <script>
+    (function() {{
+        var frameNames = {frame_names_json};
+        var slider = document.getElementById('jsSpeedSlider');
+        var valLabel = document.getElementById('jsSpeedVal');
+        var plotDiv = document.querySelector('.plotly-graph-div');
+        var isPlaying = false;
+
+        if (plotDiv) {{
+            plotDiv.on('plotly_animated', function() {{ isPlaying = false; }});
+            plotDiv.on('plotly_animatingframe', function() {{ isPlaying = true; }});
+        }}
+
+        slider.addEventListener('input', function() {{
+            var ms = parseInt(this.value);
+            valLabel.textContent = ms + ' ms';
+            if (plotDiv && isPlaying) {{
+                Plotly.animate(plotDiv, frameNames, {{
+                    frame: {{duration: ms, redraw: true}},
+                    transition: {{duration: 0}},
+                    fromcurrent: true,
+                    mode: 'immediate'
+                }});
+            }}
+        }});
+
+        if (plotDiv) {{
+            plotDiv.addEventListener('wheel', function(e) {{ e.preventDefault(); }}, {{passive: false}});
+            Plotly.relayout(plotDiv, {{autosize: true}});
+            window.addEventListener('resize', function() {{
+                Plotly.Plots.resize(plotDiv);
+            }});
+        }}
+    }})();
+    </script>
+    """
 
 
 def create_ghg_analysis_excel(ghg_data, field_name=None):
@@ -695,6 +958,65 @@ def _responsive_css() -> None:
               border-radius: var(--border-radius);
           }
 
+          .st-key-processed_viz_layout_primary [data-testid="stHorizontalBlock"],
+          .st-key-processed-viz-layout-primary [data-testid="stHorizontalBlock"],
+          .st-key-processed_viz_layout_secondary [data-testid="stHorizontalBlock"],
+          .st-key-processed-viz-layout-secondary [data-testid="stHorizontalBlock"] {
+              width: min(100%, 1162px) !important;
+              max-width: 1162px !important;
+              margin: 24px auto 0 auto !important;
+              gap: 32px !important;
+              align-items: flex-start !important;
+              justify-content: center !important;
+          }
+
+          .st-key-processed_viz_layout_primary [data-testid="column"]:nth-child(1),
+          .st-key-processed-viz-layout-primary [data-testid="column"]:nth-child(1),
+          .st-key-processed_viz_layout_secondary [data-testid="column"]:nth-child(1),
+          .st-key-processed-viz-layout-secondary [data-testid="column"]:nth-child(1) {
+              flex: 0 0 700px !important;
+              width: 700px !important;
+              max-width: 700px !important;
+          }
+
+          .st-key-processed_viz_layout_primary [data-testid="column"]:nth-child(2),
+          .st-key-processed-viz-layout-primary [data-testid="column"]:nth-child(2),
+          .st-key-processed_viz_layout_secondary [data-testid="column"]:nth-child(2),
+          .st-key-processed-viz-layout-secondary [data-testid="column"]:nth-child(2) {
+              flex: 0 0 430px !important;
+              width: 430px !important;
+              max-width: 430px !important;
+          }
+
+          @media (max-width: 1300px) {
+              .st-key-processed_viz_layout_primary [data-testid="stHorizontalBlock"],
+              .st-key-processed-viz-layout-primary [data-testid="stHorizontalBlock"],
+              .st-key-processed_viz_layout_secondary [data-testid="stHorizontalBlock"],
+              .st-key-processed-viz-layout-secondary [data-testid="stHorizontalBlock"] {
+                  width: 100% !important;
+                  max-width: 100% !important;
+                  margin: 24px auto 0 auto !important;
+              }
+
+              .st-key-processed_viz_layout_primary [data-testid="column"]:nth-child(1),
+              .st-key-processed-viz-layout-primary [data-testid="column"]:nth-child(1),
+              .st-key-processed_viz_layout_secondary [data-testid="column"]:nth-child(1),
+              .st-key-processed-viz-layout-secondary [data-testid="column"]:nth-child(1) {
+                  flex: 1 1 60% !important;
+                  width: auto !important;
+                  max-width: none !important;
+              }
+
+              .st-key-processed_viz_layout_primary [data-testid="column"]:nth-child(2),
+              .st-key-processed-viz-layout-primary [data-testid="column"]:nth-child(2),
+              .st-key-processed_viz_layout_secondary [data-testid="column"]:nth-child(2),
+              .st-key-processed-viz-layout-secondary [data-testid="column"]:nth-child(2) {
+                  flex: 1 1 40% !important;
+                  width: auto !important;
+                  max-width: none !important;
+              }
+          }
+
           /* Hide skip navigation links */
           .skip-link {
               display: none !important;
@@ -1117,13 +1439,26 @@ def render_ui() -> None:
             field_name = st.text_input("Nombre del Campo", value="Perimetro Prev")
         
         indice = st.text_input("Índice de Vegetación", value="NDVI")
-        anio = st.text_input("Año", value="2024")
+
+        detected_year = (
+            _latest_processed_year(field_name, indice)
+            or _latest_loaded_image_year(field_name, base_folder=base_folder)
+        )
+        year_state_field = st.session_state.get("year_input_field")
+        if detected_year and year_state_field != field_name:
+            st.session_state["year_input"] = detected_year
+            st.session_state["year_input_field"] = field_name
+        elif "year_input" not in st.session_state:
+            st.session_state["year_input"] = detected_year or "2024"
+            st.session_state["year_input_field"] = field_name
+
+        anio = st.text_input("Año", key="year_input")
         st.write("---")
 
         # Google Maps API Key from configuration
         google_api_key = settings.GOOGLE_MAPS_API_KEY
         if not google_api_key:
-            st.info("No se configuró GOOGLE_MAPS_API_KEY. El mapa base interactivo puede estar limitado.")
+            st.info("No se configuró GOOGLE_MAPS_API_KEY. Se usará mapa satelital gratuito de Esri para la vista 2D.")
 
         st.subheader("Análisis Masivo de ZIP NDVI")
         uploaded_files = st.file_uploader(
@@ -1248,10 +1583,34 @@ def render_ui() -> None:
                 st.success(f"Todos los archivos guardados en {field_name}/{indice}/{anio}.")
                 
                 # Then process the files
+                st.markdown("### Progreso del Análisis Masivo")
+                progress_bar = st.progress(0)
+                progress_status = st.empty()
+
+                def update_bulk_progress(event):
+                    stage = event.get("stage", "process")
+                    completed = int(event.get("completed", 0) or 0)
+                    total = max(int(event.get("total", 1) or 1), 1)
+                    stage_progress = min(max(completed / total, 0.0), 1.0)
+
+                    stage_windows = {
+                        "extract": (0.00, 0.12),
+                        "index": (0.12, 0.18),
+                        "process": (0.18, 0.92),
+                        "write": (0.92, 0.98),
+                        "done": (1.00, 1.00),
+                    }
+                    start, end = stage_windows.get(stage, stage_windows["process"])
+                    overall = 1.0 if stage == "done" else start + (end - start) * stage_progress
+                    progress_bar.progress(int(overall * 100))
+                    progress_status.info(event.get("message", "Procesando..."))
+
                 with st.spinner("⏳ Ejecutando análisis masivo... Esto puede tardar varios minutos."):
                     esp_xlsx, idw_xlsx, qgis_xlsx = bulk_unzip_and_analyze_new_parallel(
-                        indice, anio, base_folder=field_folder
+                        indice, anio, base_folder=field_folder, progress_callback=update_bulk_progress
                     )
+                progress_bar.progress(100)
+                progress_status.success("Análisis masivo completado.")
                 if esp_xlsx and os.path.exists(esp_xlsx):
                     st.success(f"Espacial => {esp_xlsx}")
                 if idw_xlsx and os.path.exists(idw_xlsx):
@@ -1364,256 +1723,123 @@ def render_ui() -> None:
         show_proc = st.session_state.get("show_processed_data", False)
 
         if show_proc and (processed_path is not None) and os.path.exists(processed_path):
-            data_sheets = load_timeseries_data(processed_path)
+            processed_mtime = _file_mtime(processed_path)
+            if st.session_state.get("processed_data_loaded_once"):
+                data_sheets = cached_timeseries_data(processed_path, processed_mtime)
+            else:
+                with st.spinner("Cargando datos procesados..."):
+                    data_sheets = cached_timeseries_data(processed_path, processed_mtime)
+            st.session_state["processed_data_loaded_once"] = True
             if data_sheets:
                 sheet_list = list(data_sheets.keys())
                 chosen_sheet_processed = st.selectbox(
                     "Seleccionar hoja para datos procesados (3D estático y 2D)", sheet_list, key="processed_sheet_selector"
                 )
 
-                col1, col2 = st.columns([1, 1], gap="small")
-                with col1:
-                    if current_field:
-                        qgis_file = os.path.join(
-                            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                            "assets",
-                            "data",
-                            current_field,
-                            f"INFORME_{indice}_QGIS_{anio}.xlsx",
-                        )
-                    else:
-                        qgis_file = os.path.join(
-                            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                            "assets",
-                            "data",
-                            f"INFORME_{indice}_QGIS_{anio}.xlsx",
-                        )
-                    if not os.path.exists(qgis_file):
-                        st.error(f"Archivo QGIS no encontrado => {qgis_file}")
-                    else:
-                        try:
-                            xls = pd.ExcelFile(qgis_file)
-                            if chosen_sheet_processed not in xls.sheet_names:
-                                st.error(f"Hoja '{chosen_sheet_processed}' no está en QGIS => {xls.sheet_names}")
-                            else:
-                                df_qgis = pd.read_excel(qgis_file, sheet_name=chosen_sheet_processed)
-                                html_2d = create_2d_scatter_plot_ndvi_interactive_qgis(
-                                    qgis_df=df_qgis,
-                                    sheet_name=chosen_sheet_processed,
-                                    google_api_key=google_api_key,
-                                    margin_frac=0.05,
-                                )
-
-                                if html_2d:
-                                    st.markdown('<div class="overflow-wrap">', unsafe_allow_html=True)
-                                    components.html(html_2d, height=700, scrolling=True)  # ← no key
-                                    st.markdown("</div>", unsafe_allow_html=True)
-                                else:
-                                    st.error("No se pudo crear el gráfico interactivo QGIS.")
-                        except Exception as e:
-                            st.error(f"Error leyendo QGIS => {e}")
-
-                with col2:
-                    # Show corresponding NDVI ColorMap image instead of 3D plot
-                    image_path = None
-                    if current_field:
-                        upload_folder = os.path.join("upload_data", current_field, indice, anio)
-                    else:
-                        upload_folder = os.path.join("upload_data", f"{indice}_{anio}")
-                    if os.path.exists(upload_folder):
-                        for file in os.listdir(upload_folder):
-                            if "ColorMap" in file and chosen_sheet_processed in file and file.lower().endswith('.tiff'):
-                                image_path = os.path.join(upload_folder, file)
-                                break
-                    
-                    if image_path and os.path.exists(image_path):
-                        from PIL import Image
-                        import base64
-                        from io import BytesIO
-                        
-                        img = Image.open(image_path)
-                        # Upscale small images so they display large and crisp
-                        min_display_width = 800
-                        if img.width < min_display_width:
-                            scale = min_display_width // img.width + 1
-                            img = img.resize(
-                                (img.width * scale, img.height * scale),
-                                Image.NEAREST
+                with st.container(key="processed_viz_layout_primary"):
+                    col1, col2 = st.columns(
+                        [PROCESSED_VIZ_MAP_WIDTH_PX, PROCESSED_VIZ_IMAGE_WIDTH_PX],
+                        gap="small",
+                    )
+                    with col1:
+                        if current_field:
+                            qgis_file = os.path.join(
+                                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                                "assets",
+                                "data",
+                                current_field,
+                                f"INFORME_{indice}_QGIS_{anio}.xlsx",
                             )
+                        else:
+                            qgis_file = os.path.join(
+                                os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                                "assets",
+                                "data",
+                                f"INFORME_{indice}_QGIS_{anio}.xlsx",
+                            )
+                        if not os.path.exists(qgis_file):
+                            st.error(f"Archivo QGIS no encontrado => {qgis_file}")
+                        else:
+                            try:
+                                qgis_mtime = _file_mtime(qgis_file)
+                                qgis_sheet_names = cached_excel_sheet_names(qgis_file, qgis_mtime)
+                                if chosen_sheet_processed not in qgis_sheet_names:
+                                    st.error(f"Hoja '{chosen_sheet_processed}' no está en QGIS => {qgis_sheet_names}")
+                                else:
+                                    html_2d = cached_qgis_html(
+                                        qgis_file,
+                                        chosen_sheet_processed,
+                                        qgis_mtime,
+                                        google_api_key,
+                                        0.05,
+                                    )
+
+                                    if html_2d:
+                                        st.markdown('<div class="overflow-wrap">', unsafe_allow_html=True)
+                                        components.html(
+                                            html_2d,
+                                            height=_qgis_component_height(google_api_key),
+                                            scrolling=True,
+                                        )
+                                        st.markdown("</div>", unsafe_allow_html=True)
+                                    else:
+                                        st.error("No se pudo crear el gráfico interactivo QGIS.")
+                            except Exception as e:
+                                st.error(f"Error leyendo QGIS => {e}")
+
+                    with col2:
+                        # Show corresponding NDVI ColorMap image instead of 3D plot
+                        image_path = None
+                        if current_field:
+                            upload_folder = os.path.join("upload_data", current_field, indice, anio)
+                        else:
+                            upload_folder = os.path.join("upload_data", f"{indice}_{anio}")
+                        if os.path.exists(upload_folder):
+                            for file in os.listdir(upload_folder):
+                                if "ColorMap" in file and chosen_sheet_processed in file and file.lower().endswith('.tiff'):
+                                    image_path = os.path.join(upload_folder, file)
+                                    break
                         
-                        # Render as inline HTML (no iframe) so it zooms with the page
-                        buffer = BytesIO()
-                        img.save(buffer, format='PNG')
-                        img_b64 = base64.b64encode(buffer.getvalue()).decode()
-                        
-                        ndvi_html = f"""
-                        <html><body style="margin:0; padding:0; overflow:hidden;">
-                        <div style="display:flex; flex-direction:column; align-items:flex-start;
-                                    justify-content:flex-start; width:100%;
-                                    box-sizing:border-box; padding:70px 0 0 0;">
-                            <img src="data:image/png;base64,{img_b64}"
-                                 style="display:block; width:65%; height:auto;
-                                        border-radius:8px;
-                                        box-shadow:0 2px 8px rgba(0,0,0,0.15);" />
-                            <p style="text-align:center; width:75%; margin-top:8px; color:#666;
-                                      font-family:sans-serif; font-size:14px;">
-                                NDVI ColorMap - {chosen_sheet_processed}
-                            </p>
-                        </div>
-                        <script>
-                        (function() {{
-                            var targets = [document];
-                            try {{ if (window.parent && window.parent.document) targets.push(window.parent.document); }} catch(e) {{}}
-                            try {{ if (window.top && window.top.document) targets.push(window.top.document); }} catch(e) {{}}
-                            targets.forEach(function(doc) {{
-                                doc.addEventListener('wheel', function(e) {{
-                                    if (e.ctrlKey || e.metaKey) {{
-                                        e.preventDefault();
-                                        e.stopImmediatePropagation();
-                                        return false;
-                                    }}
-                                }}, {{ passive: false, capture: true }});
-                                doc.addEventListener('keydown', function(e) {{
-                                    if ((e.ctrlKey || e.metaKey) && (e.key==='+' || e.key==='-' || e.key==='=' || e.key==='0')) {{
-                                        e.preventDefault();
-                                        e.stopImmediatePropagation();
-                                        return false;
-                                    }}
-                                }}, {{ capture: true }});
-                            }});
-                        }})();
-                        </script>
-                        </body></html>
-                        """
-                        components.html(ndvi_html, height=520, scrolling=False)
-                    else:
-                        # Fallback to 3D plot if no image found
-                        lat_arr = data_sheets[chosen_sheet_processed]["lat"]
-                        lon_arr = data_sheets[chosen_sheet_processed]["lon"]
-                        ndvi_mat = data_sheets[chosen_sheet_processed]["ndvi"]
+                        if image_path and os.path.exists(image_path):
+                            ndvi_html = cached_colormap_image_html(
+                                image_path,
+                                _file_mtime(image_path),
+                                chosen_sheet_processed,
+                            )
+                            components.html(ndvi_html, height=500, scrolling=False)
+                        else:
+                            # Fallback to 3D plot if no image found
+                            lat_arr = data_sheets[chosen_sheet_processed]["lat"]
+                            lon_arr = data_sheets[chosen_sheet_processed]["lon"]
+                            ndvi_mat = data_sheets[chosen_sheet_processed]["ndvi"]
 
-                        x_vals, y_vals, z_vals = [], [], []
-                        for i, latv in enumerate(lat_arr):
-                            for j, lonv in enumerate(lon_arr):
-                                x_vals.append(lonv)
-                                y_vals.append(latv)
-                                z_vals.append(ndvi_mat[i, j])
+                            x_vals, y_vals, z_vals = [], [], []
+                            for i, latv in enumerate(lat_arr):
+                                for j, lonv in enumerate(lon_arr):
+                                    x_vals.append(lonv)
+                                    y_vals.append(latv)
+                                    z_vals.append(ndvi_mat[i, j])
 
-                        df_3d = pd.DataFrame({"Longitud": x_vals, "Latitud": y_vals, "NDVI": z_vals})
-                        fig_3d = create_3d_surface_plot(df_3d, grid_size, color_map, z_scale, smoothness)
-                        if fig_3d:
-                            fig_3d.update_layout(margin=dict(l=0, r=0, t=30, b=0), autosize=True)
-                            st.plotly_chart(fig_3d, use_container_width=True, config={'scrollZoom': False})
+                            df_3d = pd.DataFrame({"Longitud": x_vals, "Latitud": y_vals, "NDVI": z_vals})
+                            fig_3d = create_3d_surface_plot(df_3d, grid_size, color_map, z_scale, smoothness)
+                            if fig_3d:
+                                fig_3d.update_layout(margin=dict(l=0, r=0, t=30, b=0), autosize=True)
+                                st.plotly_chart(fig_3d, use_container_width=True, config={'scrollZoom': False})
 
-                fig_time = create_3d_simulation_plot_time_interpolation(
-                    data_sheets, grid_size, color_map, z_scale, smoothness, steps_value,
-                    frame_duration=200
+                time_animation_html = cached_time_animation_html(
+                    processed_path,
+                    processed_mtime,
+                    grid_size,
+                    color_map,
+                    z_scale,
+                    smoothness,
+                    steps_value,
+                    TIME_ANIMATION_RENDER_VERSION,
                 )
-                if fig_time:
-                    fig_time.update_layout(
-                        margin=dict(l=0, r=0, t=30, b=100),
-                        paper_bgcolor='rgba(0,0,0,0)',
-                        plot_bgcolor='rgba(0,0,0,0)',
-                        autosize=True,
-                        width=None,   # remove fixed width so it fills container
-                        height=900,
-                    )
+                if time_animation_html:
                     st.markdown("#### Animación 3D de Series Temporales")
-                    # Render via components.html with embedded JS speed slider
-                    # so speed changes happen client-side (no Streamlit rerun / chart rebuild)
-                    import plotly.io as pio
-                    chart_html = pio.to_html(
-                        fig_time, include_plotlyjs='cdn', full_html=False,
-                        config={'scrollZoom': False}
-                    )
-                    # Extract frame names from figure for JS animate call
-                    _frame_names_js = [f.name for f in fig_time.frames]
-                    import json as _json
-                    _frame_names_json = _json.dumps(_frame_names_js)
-                    speed_slider_html = f"""
-                    <style>
-                        html, body {{
-                            margin: 0; padding: 0;
-                            background: transparent !important;
-                            overflow: hidden;
-                        }}
-                        .speed-control {{
-                            display: flex; align-items: center; justify-content: center;
-                            gap: 14px; padding: 8px 0 4px 0; font-family: sans-serif;
-                        }}
-                        .speed-control label {{
-                            color: #ccc; font-size: 14px; white-space: nowrap;
-                        }}
-                        .speed-control input[type=range] {{
-                            width: 260px; accent-color: #4682B4; cursor: pointer;
-                        }}
-                        .speed-control .speed-val {{
-                            color: #4682B4; font-weight: bold; font-size: 14px;
-                            min-width: 55px; text-align: center;
-                        }}
-                        /* Make plotly chart fill width and center */
-                        .js-plotly-plot,
-                        .plotly-graph-div,
-                        .plot-container,
-                        .svg-container {{
-                            margin: 0 auto !important;
-                            width: 100% !important;
-                            max-width: 100% !important;
-                        }}
-                    </style>
-                    <div class="speed-control">
-                        <label>🎚️ Velocidad:</label>
-                        <span style="color:#aaa;font-size:12px;">Rápido</span>
-                        <input type="range" id="jsSpeedSlider" min="30" max="800" value="200" step="10">
-                        <span style="color:#aaa;font-size:12px;">Lento</span>
-                        <span class="speed-val" id="jsSpeedVal">200 ms</span>
-                    </div>
-                    {chart_html}
-                    <script>
-                    (function() {{
-                        var frameNames = {_frame_names_json};
-                        var slider = document.getElementById('jsSpeedSlider');
-                        var valLabel = document.getElementById('jsSpeedVal');
-                        var plotDiv = document.querySelector('.plotly-graph-div');
-                        var isPlaying = false;
-
-                        // Detect play/pause from Plotly button clicks
-                        if (plotDiv) {{
-                            plotDiv.on('plotly_animated', function() {{ isPlaying = false; }});
-                            plotDiv.on('plotly_animatingframe', function() {{ isPlaying = true; }});
-                        }}
-
-                        slider.addEventListener('input', function() {{
-                            var ms = parseInt(this.value);
-                            valLabel.textContent = ms + ' ms';
-                            if (plotDiv && isPlaying) {{
-                                // Re-issue animate from current frame with new speed
-                                Plotly.animate(plotDiv, frameNames, {{
-                                    frame: {{duration: ms, redraw: true}},
-                                    transition: {{duration: 0}},
-                                    fromcurrent: true,
-                                    mode: 'immediate'
-                                }});
-                            }}
-                        }});
-
-                        // Also disable scroll zoom on the 3D scene
-                        if (plotDiv) {{
-                            plotDiv.addEventListener('wheel', function(e) {{ e.preventDefault(); }}, {{passive: false}});
-                        }}
-
-                        // Force chart to fill container width
-                        if (plotDiv) {{
-                            Plotly.relayout(plotDiv, {{autosize: true}});
-                            window.addEventListener('resize', function() {{
-                                Plotly.Plots.resize(plotDiv);
-                            }});
-                        }}
-                    }})();
-                    </script>
-                    """
                     # Inject transparent background on the Streamlit iframe itself
-                    components.html(speed_slider_html, height=1020, scrolling=False)
+                    components.html(time_animation_html, height=1020, scrolling=False)
                     st.markdown(
                         '<style>iframe[title="streamlit_components.v1.components.html"]'
                         '{background:transparent !important;}</style>',
@@ -1686,14 +1912,62 @@ def render_ui() -> None:
                         field_base_folder = os.path.join("./upload_data", safe_field_name)
                     else:
                         field_base_folder = "./upload_data"
+                    st.markdown("### Progreso del Pipeline HPC")
+                    hpc_progress_bar = st.progress(0)
+                    hpc_progress_status = st.empty()
+
+                    def update_hpc_progress(event):
+                        stage = event.get("stage", "points")
+                        completed = int(event.get("completed", 0) or 0)
+                        total = max(int(event.get("total", 1) or 1), 1)
+                        stage_progress = min(max(completed / total, 0.0), 1.0)
+
+                        stage_windows = {
+                            "start": (0.00, 0.03),
+                            "climate": (0.03, 0.12),
+                            "emission": (0.12, 0.55),
+                            "qgis": (0.55, 0.62),
+                            "points": (0.62, 0.92),
+                            "save": (0.92, 0.98),
+                            "done": (1.00, 1.00),
+                            "error": (1.00, 1.00),
+                        }
+                        start, end = stage_windows.get(stage, stage_windows["points"])
+                        overall = 1.0 if stage in {"done", "error"} else start + (end - start) * stage_progress
+                        hpc_progress_bar.progress(int(overall * 100))
+                        message = event.get("message", "Ejecutando pipeline HPC...")
+                        if stage == "error":
+                            hpc_progress_status.error(message)
+                        else:
+                            hpc_progress_status.info(message)
+
                     with st.spinner("⏳ Ejecutando pipeline HPC... Esto puede tardar varios minutos."):
-                        hpc_data = run_full_hpc_pipeline(indice, anio, base_folder=field_base_folder)
+                        hpc_data = run_full_hpc_pipeline(
+                            indice,
+                            anio,
+                            base_folder=field_base_folder,
+                            progress_callback=update_hpc_progress,
+                        )
                     if hpc_data is None:
                         st.error("El pipeline HPC devolvió None. Revisa los logs o rutas de archivos.")
                     else:
                         st.session_state["hpc_data"] = hpc_data
                         # Auto-persist prospective workbook for the mobile app
+                        update_hpc_progress({
+                            "stage": "save",
+                            "completed": 0,
+                            "total": 1,
+                            "message": "Guardando archivo prospectivo para la versión móvil...",
+                        })
                         saved_path = save_hpc_workbook_to_disk(hpc_data, indice, anio, field_name)
+                        update_hpc_progress({
+                            "stage": "save",
+                            "completed": 1,
+                            "total": 1,
+                            "message": "Archivo prospectivo guardado.",
+                        })
+                        hpc_progress_bar.progress(100)
+                        hpc_progress_status.success("Pipeline HPC completado.")
                         if saved_path:
                             st.info(f"💾 Datos prospectivos guardados para móvil: `{os.path.basename(saved_path)}`")
                         else:
@@ -1742,7 +2016,8 @@ def render_ui() -> None:
 
         data_sheets = None
         if processed_path and os.path.exists(processed_path):
-            data_sheets = load_timeseries_data(processed_path)
+            processed_mtime = _file_mtime(processed_path)
+            data_sheets = cached_timeseries_data(processed_path, processed_mtime)
 
         if data_sheets:
             sheet_list = list(data_sheets.keys())
@@ -1761,107 +2036,116 @@ def render_ui() -> None:
                     chosen_idx = point_labels.index(chosen_point)
                     HPC_info = results[chosen_idx]
 
-            col1, col2 = st.columns([1.3, 1], gap="medium")
-            with col1:
-                if current_field:
-                    qgis_file = os.path.join(
-                        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                        "assets",
-                        "data",
-                        current_field,
-                        f"INFORME_{indice}_QGIS_{anio}.xlsx",
-                    )
-                else:
-                    qgis_file = os.path.join(
-                        os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
-                        "assets",
-                        "data",
-                        f"INFORME_{indice}_QGIS_{anio}.xlsx",
-                    )
-                if not os.path.exists(qgis_file):
-                    st.error(f"Archivo QGIS no encontrado => {qgis_file}")
-                else:
-                    try:
-                        xls = pd.ExcelFile(qgis_file)
-                        if chosen_sheet_processed not in xls.sheet_names:
-                            st.error(f"Hoja '{chosen_sheet_processed}' no está en QGIS => {xls.sheet_names}")
-                        else:
-                            df_qgis = pd.read_excel(qgis_file, sheet_name=chosen_sheet_processed)
-                            html_2d = create_2d_scatter_plot_ndvi_interactive_qgis(
-                                qgis_df=df_qgis,
-                                sheet_name=chosen_sheet_processed,
-                                google_api_key=google_api_key,
-                                margin_frac=0.05,
-                            )
-
-                            if html_2d:
-                                # wrapper lets it scroll horizontally if needed
-                                st.markdown('<div class="overflow-wrap">', unsafe_allow_html=True)
-                                components.html(html_2d, height=700, scrolling=True)  # height must match function's height_px
-                                st.markdown("</div>", unsafe_allow_html=True)
-                            else:
-                                st.error("No se pudo crear el gráfico interactivo QGIS.")
-                    except Exception as e:
-                        st.error(f"Error leyendo QGIS => {e}")
-
-            with col2:
-                lat_arr = data_sheets[chosen_sheet_processed]["lat"]
-                lon_arr = data_sheets[chosen_sheet_processed]["lon"]
-                ndvi_mat = data_sheets[chosen_sheet_processed]["ndvi"]
-
-                x_vals, y_vals, z_vals = [], [], []
-                for i, latv in enumerate(lat_arr):
-                    for j, lonv in enumerate(lon_arr):
-                        x_vals.append(lonv)
-                        y_vals.append(latv)
-                        z_vals.append(ndvi_mat[i, j])
-
-                if HPC_info is not None:
-                    hpc_data = st.session_state["hpc_data"]
-                    XLDA = HPC_info["XLDA"]  # shape [1000 x 12]
-                    # VC = HPC_info["VC"]    # unused in the density plot below
-                    # XInf2 = HPC_info["XInf"]
-
-                    # Add data source indicator to section header
-                    data_source = "Datos Simulados" if hpc_data.get("using_mock_data", False) else "Datos Reales"
-                    st.markdown(f"## Evolución de Riesgo Mensual ({data_source})")
-
-                    fig = go.Figure()
-                    n_months = XLDA.shape[1]
-
-                    # Plot the filled-area KDE for HPC data
-                    for m in range(1, n_months):
-                        month_data = XLDA[:, m]
-                        kde = gaussian_kde(month_data)
-                        x_range = np.linspace(month_data.min(), month_data.max(), 200)
-                        density = kde(x_range)
-                        
-                        # Define which months are initially visible (2, 6, 8, 10, 12)
-                        initially_visible_months = [2, 3, 6, 9, 12]
-                        is_visible = (m + 1) in initially_visible_months
-                        
-                        fig.add_trace(
-                            go.Scatter(
-                                x=x_range,
-                                y=density,
-                                mode="lines",
-                                fill="tozeroy",
-                                name=f"Mes {m+1}",
-                                hovertemplate="Mes: %{text}<br>Pérdida: %{x:.2f}<br>Densidad: %{y:.2f}",
-                                text=[f"Mes {m+1}"] * len(x_range),
-                                visible=is_visible,  # Set initial visibility
-                            )
+            with st.container(key="processed_viz_layout_secondary"):
+                col1, col2 = st.columns(
+                    [PROCESSED_VIZ_MAP_WIDTH_PX, PROCESSED_VIZ_IMAGE_WIDTH_PX],
+                    gap="small",
+                )
+                with col1:
+                    if current_field:
+                        qgis_file = os.path.join(
+                            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                            "assets",
+                            "data",
+                            current_field,
+                            f"INFORME_{indice}_QGIS_{anio}.xlsx",
                         )
+                    else:
+                        qgis_file = os.path.join(
+                            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+                            "assets",
+                            "data",
+                            f"INFORME_{indice}_QGIS_{anio}.xlsx",
+                        )
+                    if not os.path.exists(qgis_file):
+                        st.error(f"Archivo QGIS no encontrado => {qgis_file}")
+                    else:
+                        try:
+                            qgis_mtime = _file_mtime(qgis_file)
+                            qgis_sheet_names = cached_excel_sheet_names(qgis_file, qgis_mtime)
+                            if chosen_sheet_processed not in qgis_sheet_names:
+                                st.error(f"Hoja '{chosen_sheet_processed}' no está en QGIS => {qgis_sheet_names}")
+                            else:
+                                html_2d = cached_qgis_html(
+                                    qgis_file,
+                                    chosen_sheet_processed,
+                                    qgis_mtime,
+                                    google_api_key,
+                                    0.05,
+                                )
 
-                    fig.update_layout(
-                        xaxis_title="Pérdidas (USD/Mes-Zona)",
-                        yaxis_title="Densidad",
-                        showlegend=True,
-                        margin=dict(l=0, r=0, t=30, b=0),
-                    )
-                    st.plotly_chart(fig, use_container_width=True)
-                else:
-                    st.info("No hay datos HPC cargados/seleccionados. Ejecuta el pipeline o elige un punto.")
+                                if html_2d:
+                                    # wrapper lets it scroll horizontally if needed
+                                    st.markdown('<div class="overflow-wrap">', unsafe_allow_html=True)
+                                    components.html(
+                                        html_2d,
+                                        height=_qgis_component_height(google_api_key),
+                                        scrolling=True,
+                                    )
+                                    st.markdown("</div>", unsafe_allow_html=True)
+                                else:
+                                    st.error("No se pudo crear el gráfico interactivo QGIS.")
+                        except Exception as e:
+                            st.error(f"Error leyendo QGIS => {e}")
+
+                with col2:
+                    lat_arr = data_sheets[chosen_sheet_processed]["lat"]
+                    lon_arr = data_sheets[chosen_sheet_processed]["lon"]
+                    ndvi_mat = data_sheets[chosen_sheet_processed]["ndvi"]
+
+                    x_vals, y_vals, z_vals = [], [], []
+                    for i, latv in enumerate(lat_arr):
+                        for j, lonv in enumerate(lon_arr):
+                            x_vals.append(lonv)
+                            y_vals.append(latv)
+                            z_vals.append(ndvi_mat[i, j])
+
+                    if HPC_info is not None:
+                        hpc_data = st.session_state["hpc_data"]
+                        XLDA = HPC_info["XLDA"]  # shape [1000 x 12]
+                        # VC = HPC_info["VC"]    # unused in the density plot below
+                        # XInf2 = HPC_info["XInf"]
+
+                        # Add data source indicator to section header
+                        data_source = "Datos Simulados" if hpc_data.get("using_mock_data", False) else "Datos Reales"
+                        st.markdown(f"## Evolución de Riesgo Mensual ({data_source})")
+
+                        fig = go.Figure()
+                        n_months = XLDA.shape[1]
+
+                        # Plot the filled-area KDE for HPC data
+                        for m in range(1, n_months):
+                            month_data = XLDA[:, m]
+                            kde = gaussian_kde(month_data)
+                            x_range = np.linspace(month_data.min(), month_data.max(), 200)
+                            density = kde(x_range)
+                            
+                            # Define which months are initially visible (2, 6, 8, 10, 12)
+                            initially_visible_months = [2, 3, 6, 9, 12]
+                            is_visible = (m + 1) in initially_visible_months
+                            
+                            fig.add_trace(
+                                go.Scatter(
+                                    x=x_range,
+                                    y=density,
+                                    mode="lines",
+                                    fill="tozeroy",
+                                    name=f"Mes {m+1}",
+                                    hovertemplate="Mes: %{text}<br>Pérdida: %{x:.2f}<br>Densidad: %{y:.2f}",
+                                    text=[f"Mes {m+1}"] * len(x_range),
+                                    visible=is_visible,  # Set initial visibility
+                                )
+                            )
+    
+                        fig.update_layout(
+                            xaxis_title="Pérdidas (USD/Mes-Zona)",
+                            yaxis_title="Densidad",
+                            showlegend=True,
+                            margin=dict(l=0, r=0, t=30, b=0),
+                        )
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.info("No hay datos HPC cargados/seleccionados. Ejecuta el pipeline o elige un punto.")
 
             st.markdown("---")
 
@@ -1963,14 +2247,55 @@ def render_ui() -> None:
         
         # Process GHG data
         if st.button("Procesar Datos de GEI"):
+            ghg_progress_bar = st.progress(0)
+            ghg_progress_status = st.empty()
+
+            def update_ghg_progress(event):
+                stage = event.get("stage", "start")
+                completed = int(event.get("completed", 0) or 0)
+                total = max(int(event.get("total", 1) or 1), 1)
+                stage_progress = min(max(completed / total, 0.0), 1.0)
+                stage_windows = {
+                    "start": (0.00, 0.03),
+                    "locate": (0.03, 0.10),
+                    "read": (0.10, 0.20),
+                    "aggregate": (0.20, 0.32),
+                    "cluster": (0.32, 0.42),
+                    "sheet_risk": (0.42, 0.58),
+                    "matrices": (0.58, 0.70),
+                    "baseline": (0.70, 0.78),
+                    "scenarios": (0.78, 0.93),
+                    "exchange": (0.93, 0.98),
+                    "done": (1.00, 1.00),
+                    "error": (1.00, 1.00),
+                }
+                start, end = stage_windows.get(stage, stage_windows["start"])
+                overall = 1.0 if stage in {"done", "error"} else start + (end - start) * stage_progress
+                ghg_progress_bar.progress(int(overall * 100))
+                message = event.get("message", "Procesando datos de GEI...")
+                if stage == "error":
+                    ghg_progress_status.error(message)
+                else:
+                    ghg_progress_status.info(message)
+
             with st.spinner("Procesando datos de captura de GEI..."):
                 # Ensure field_name uses underscores for consistency
                 safe_field_name = field_name.replace(' ', '_') if field_name else None
-                ghg_data = process_ghg_data(indice, anio, base_folder="./upload_data", field_name=safe_field_name)
+                ghg_data = process_ghg_data(
+                    indice,
+                    anio,
+                    base_folder="./upload_data",
+                    field_name=safe_field_name,
+                    progress_callback=update_ghg_progress,
+                )
                 if ghg_data:
                     st.session_state["ghg_data"] = ghg_data
+                    ghg_progress_bar.progress(100)
+                    ghg_progress_status.success("Procesamiento de GEI completado.")
                     st.success("¡Datos de GEI procesados exitosamente!")
                 else:
+                    ghg_progress_bar.progress(100)
+                    ghg_progress_status.error("No se pudieron procesar los datos de GEI.")
                     st.error("Falló el procesamiento de datos de GEI. Verifica si existen los archivos requeridos.")
         
         # Display results if data exists

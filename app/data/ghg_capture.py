@@ -63,9 +63,23 @@ def Fuzzyx(Xf2, sigmaf, Xs2, sigmas, XCf, XCs, ME, MI, MG, MP):
     return np.array(LDA)
 
 
-def process_ghg_data(indice, anio, base_folder="./upload_data", field_name=None):
+def process_ghg_data(indice, anio, base_folder="./upload_data", field_name=None, progress_callback=None):
     """Main GHG capture processing function"""
+    def emit_progress(stage, completed=0, total=1, message="Procesando datos de GEI..."):
+        if progress_callback is None:
+            return
+        try:
+            progress_callback({
+                "stage": stage,
+                "completed": completed,
+                "total": max(total, 1),
+                "message": message,
+            })
+        except Exception:
+            pass
+
     try:
+        emit_progress("start", 0, 1, "Iniciando procesamiento de datos GEI...")
         # Extract field name from base_folder if not provided
         if field_name is None:
             field_name = os.path.basename(base_folder)
@@ -78,6 +92,7 @@ def process_ghg_data(indice, anio, base_folder="./upload_data", field_name=None)
             os.path.join(base_folder, indice, anio, f"INFORME_{indice}_Espacial_{anio}.xlsx")
         ]
         
+        emit_progress("locate", 0, len(possible_paths), "Buscando archivo espacial requerido...")
         nxl = None
         for path in possible_paths:
             if os.path.exists(path):
@@ -93,25 +108,30 @@ def process_ghg_data(indice, anio, base_folder="./upload_data", field_name=None)
                 st.info(f"Files in assets/data: {files}")
             return None
         
+        emit_progress("locate", len(possible_paths), len(possible_paths), f"Archivo encontrado: {os.path.basename(nxl)}")
         st.success(f"Found file: {nxl}")
             
         # Read Excel file
+        emit_progress("read", 0, 1, "Leyendo hojas del archivo espacial...")
         excel = pd.ExcelFile(nxl)
         hojas = pd.read_excel(nxl, sheet_name=None)
+        emit_progress("read", 1, 1, f"Archivo cargado con {len(hojas)} hojas.")
         
         # Productivity parameters
         Ing = 888    # USD/ha-month
         NHa = 8.7    # Number of hectares
         CNG = np.array([2, 5, 9, 14, 20])  # Cost Ha-Month - Management Level
         
+        emit_progress("aggregate", 0, max(len(hojas), 1), "Agregando datos del índice de vegetación...")
         NIx = []
         # Find maximum and minimum values
-        for nombre, df in hojas.items():
+        for idx_sheet, (nombre, df) in enumerate(hojas.items(), start=1):
             XD = df.iloc[:, 6]
             # Remove NaN values
             XD_clean = XD.dropna()
             if len(XD_clean) > 0:
                 NIx = np.concatenate((NIx, XD_clean))
+            emit_progress("aggregate", idx_sheet, max(len(hojas), 1), f"Agregando hoja {idx_sheet}/{len(hojas)}...")
         
         NIxm = np.mean(NIx)
         NIxstd = np.std(NIx)
@@ -124,17 +144,20 @@ def process_ghg_data(indice, anio, base_folder="./upload_data", field_name=None)
             st.error("No valid data found after removing NaN values")
             return None
             
+        emit_progress("cluster", 0, 1, "Calculando clusters de riesgo...")
         NC = 5
         mkm = KMeans(n_clusters=NC, random_state=42)
         mkm.fit(NIx.reshape(-1, 1))
         XC = mkm.cluster_centers_
         XCo = sorted(XC)
+        emit_progress("cluster", 1, 1, "Clusters de riesgo calculados.")
         
         # Process vegetation index clustering
         m1 = 0
         XDOR = np.zeros((1, 3))
         
-        for nombre, df in hojas.items():
+        emit_progress("sheet_risk", 0, max(len(hojas), 1), "Estimando riesgo por hoja...")
+        for idx_sheet, (nombre, df) in enumerate(hojas.items(), start=1):
             df['Risk'] = None
             XD = df.iloc[:, 6]
             
@@ -173,15 +196,18 @@ def process_ghg_data(indice, anio, base_folder="./upload_data", field_name=None)
                     Xs = (1 - Xs) * Ingp
                 
                 XDOR = np.vstack((XDOR, [m1, Xf, Xs]))
+            emit_progress("sheet_risk", idx_sheet, max(len(hojas), 1), f"Riesgo estimado en hoja {idx_sheet}/{len(hojas)}...")
         
         XDOR = np.delete(XDOR, 0, axis=0)
         
+        emit_progress("matrices", 0, 3, "Construyendo matrices de frecuencia y severidad...")
         # Create clustering for frequency and severity
         Xf = XDOR[:, 1]
         Xs = XDOR[:, 2]
         
         XCf, sigmaf = ClusteringX(Xf, NC)
         XCs, sigmas = ClusteringX(Xs, NC)
+        emit_progress("matrices", 1, 3, "Clusters de frecuencia y severidad calculados.")
         
         # Labels
         lbf = np.array([['Muy Pocos', 'Pocos', 'Más o Menos', 'Muchos', 'Bastantes']])
@@ -199,6 +225,7 @@ def process_ghg_data(indice, anio, base_folder="./upload_data", field_name=None)
             #ME[nf, ns] += Xf[k]
             ME[nf, ns] = (ME[nf, ns] + Xf[k]) / 2
             MP[nf, ns] = (MP[nf, ns] + Xs[k]) / 2
+        emit_progress("matrices", 2, 3, "Matrices de eventos y pérdidas construidas.")
         
         ME[ME[:, :] == 0] = 1
         
@@ -223,12 +250,14 @@ def process_ghg_data(indice, anio, base_folder="./upload_data", field_name=None)
                     MCG[i, j] = (0.9 + 0.2 * random.random()) * CNG[3]
                 elif MI[i, j] == 5:
                     MCG[i, j] = (0.9 + 0.2 * random.random()) * CNG[4]
+        emit_progress("matrices", 3, 3, "Matrices de impacto y costos listas.")
         
         # Generate management scenarios with proper sampling (from Jupyter notebook)
         nh = len(hojas.items())  # Number of satellite images
         LDAT = []
         NDm = len(Xf)  # Number of sampling data
         
+        emit_progress("baseline", 0, 1, "Simulando escenario base de pérdidas...")
         # Sample frequency and severity data
         Xfm = pd.DataFrame(Xf).sample(n=NDm, replace=True)
         Xf2 = np.array(Xfm)
@@ -284,9 +313,11 @@ def process_ghg_data(indice, anio, base_folder="./upload_data", field_name=None)
         MRm.append([muo, PNEo, L75o, OpVaro, cas_o, NEo, NNEo, NSo, NVCo, CG, CP, VCap, CTA, XIng, IngOp, TCO2])
         MRm = np.array(MRm)
         NGL = [1.5, 2, 3, 4]
+        emit_progress("baseline", 1, 1, "Escenario base calculado.")
         
         # Management scenarios with proper fuzzy calculations
-        for NG in NGL:
+        emit_progress("scenarios", 0, len(NGL), "Calculando escenarios de gestión...")
+        for scenario_idx, NG in enumerate(NGL, start=1):
             LDAm = np.zeros((len(LDAo), 1))
             
             Xfm = pd.DataFrame(Xf).sample(n=NDm, replace=True)
@@ -341,6 +372,7 @@ def process_ghg_data(indice, anio, base_folder="./upload_data", field_name=None)
             IngOp = (XIng + VCap) - CTA
             
             MRm = np.vstack((MRm, np.array([mu, PNE, L75, OpVar, cas_m, NEm, NNEm, NSm, NVCm, CG, CP, VCap, CTA, XIng, IngOp, TCO2])))
+            emit_progress("scenarios", scenario_idx, len(NGL), f"Escenario de gestión {scenario_idx}/{len(NGL)} calculado...")
         
         # Store reference values for visualization lines
         media_val_o = MRm[0, 0]  # Baseline mean
@@ -355,7 +387,9 @@ def process_ghg_data(indice, anio, base_folder="./upload_data", field_name=None)
         df_results = df_results.round(2)
         
         # Get exchange rate
+        emit_progress("exchange", 0, 1, "Consultando tasa USD/COP...")
         usd_cop_rate = get_usd_cop_rate()
+        emit_progress("exchange", 1, 1, "Tasa USD/COP lista.")
         
         # Create COP version of results dataframe
         df_results_cop = df_results.copy()
@@ -399,6 +433,7 @@ def process_ghg_data(indice, anio, base_folder="./upload_data", field_name=None)
             
             management_matrices[name] = MG_viz
         
+        emit_progress("done", 1, 1, "Procesamiento GEI completado.")
         return {
             'clusters': df_clusters,
             'events_matrix': ME,
@@ -429,6 +464,7 @@ def process_ghg_data(indice, anio, base_folder="./upload_data", field_name=None)
         }
         
     except Exception as e:
+        emit_progress("error", 1, 1, f"Error procesando datos GEI: {e}")
         st.error(f"Error processing GHG data: {e}")
         return None
 

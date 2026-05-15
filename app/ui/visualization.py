@@ -13,6 +13,7 @@ import logging
 from io import BytesIO
 import matplotlib.image as mpimg
 import math
+import base64
 
 import mpld3
 from mpld3 import plugins
@@ -97,6 +98,300 @@ def fetch_google_static_map(lat_min, lat_max, lon_min, lon_max, api_key, img_siz
     except Exception as e:
         logger.exception("Failed to fetch Google Static Map")
         return None
+
+
+def _normalized_qgis_data(qgis_df: pd.DataFrame) -> pd.DataFrame:
+    required = {"long-xm", "long-ym", "NDVI", "Riesgo"}
+    missing = required - set(qgis_df.columns)
+    if missing:
+        raise ValueError(f"QGIS DF missing required columns: {missing}")
+
+    normalized = qgis_df.copy()
+    normalized["long-xm"] = pd.to_numeric(normalized["long-xm"], errors="coerce")
+    normalized["long-ym"] = pd.to_numeric(normalized["long-ym"], errors="coerce")
+    normalized["NDVI"] = pd.to_numeric(normalized["NDVI"], errors="coerce")
+    normalized = normalized.dropna(subset=["long-xm", "long-ym", "NDVI"]).reset_index(drop=True)
+    if normalized.empty:
+        raise ValueError("QGIS DF has no valid longitude, latitude, and NDVI rows.")
+    return normalized
+
+
+def _bounds_with_margin(x_plot, y_plot, margin_frac: float):
+    lon_min, lon_max = float(np.min(x_plot)), float(np.max(x_plot))
+    lat_min, lat_max = float(np.min(y_plot)), float(np.max(y_plot))
+    lon_range = lon_max - lon_min
+    lat_range = lat_max - lat_min
+
+    if lon_range == 0:
+        lon_range = max(abs(lon_min) * 0.0001, 0.0005)
+    if lat_range == 0:
+        lat_range = max(abs(lat_min) * 0.0001, 0.0005)
+
+    return (
+        lon_min - margin_frac * lon_range,
+        lon_max + margin_frac * lon_range,
+        lat_min - margin_frac * lat_range,
+        lat_max + margin_frac * lat_range,
+    )
+
+
+def _qgis_point_order(x_plot, y_plot):
+    # Column-major order from bottom-left: leftmost column bottom-to-top first.
+    return {idx: order for order, idx in enumerate(sorted(range(len(x_plot)), key=lambda i: (x_plot[i], y_plot[i])))}
+
+
+def _ndvi_heatmap_data_uri(x_plot, y_plot, ndvi_vals, bounds):
+    from matplotlib.colors import LinearSegmentedColormap
+    from scipy.interpolate import Rbf
+    from PIL import Image
+
+    lon_min_adj, lon_max_adj, lat_min_adj, lat_max_adj = bounds
+    vmin, vmax = float(np.min(ndvi_vals)), float(np.max(ndvi_vals))
+    if vmax <= vmin:
+        vmax = vmin + 1e-6
+
+    grid_res = min(180, max(80, int(np.sqrt(len(ndvi_vals)) * 36)))
+    grid_lon = np.linspace(lon_min_adj, lon_max_adj, grid_res)
+    grid_lat = np.linspace(lat_min_adj, lat_max_adj, grid_res)
+    grid_x, grid_y = np.meshgrid(grid_lon, grid_lat)
+
+    try:
+        if len(np.unique(x_plot)) < 2 or len(np.unique(y_plot)) < 2 or len(ndvi_vals) < 3:
+            raise ValueError("Insufficient spatial variance for RBF interpolation.")
+        interpolator = Rbf(x_plot, y_plot, ndvi_vals, function="linear")
+        grid_ndvi = interpolator(grid_x, grid_y)
+    except Exception as exc:
+        logger.warning("QGIS Leaflet heatmap interpolation failed; using nearest interpolation: %s", exc)
+        grid_ndvi = griddata(
+            np.column_stack((x_plot, y_plot)),
+            ndvi_vals,
+            (grid_x, grid_y),
+            method="nearest",
+        )
+
+    grid_ndvi = np.nan_to_num(grid_ndvi, nan=vmin)
+    grid_ndvi = np.clip(grid_ndvi, vmin, vmax)
+
+    cmap = LinearSegmentedColormap.from_list("custom_ndvi", ["red", "orange", "yellow", "green"], N=256)
+    rgba = cmap((grid_ndvi - vmin) / (vmax - vmin))
+    rgba[..., 3] = 0.58
+
+    # ImageOverlay expects north at the top. The interpolation grid is south-to-north.
+    image = Image.fromarray((np.flipud(rgba) * 255).astype(np.uint8))
+    buffer = BytesIO()
+    image.save(buffer, format="PNG")
+    return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+
+
+def create_2d_scatter_plot_ndvi_leaflet_qgis(
+    qgis_df: pd.DataFrame,
+    sheet_name="NDVI Sheet",
+    margin_frac=0.05,
+):
+    """
+    Leaflet/Folium QGIS map using free Esri World Imagery tiles.
+    It preserves the NDVI raster overlay and point labels without requiring
+    a Google Maps API key.
+    """
+    import folium
+    import branca.colormap as cm
+
+    data = _normalized_qgis_data(qgis_df)
+    x_plot = data["long-xm"].to_numpy(dtype=float)
+    y_plot = data["long-ym"].to_numpy(dtype=float)
+    ndvi_vals = data["NDVI"].to_numpy(dtype=float)
+    riesgo_vals = data["Riesgo"].to_numpy()
+
+    bounds = _bounds_with_margin(x_plot, y_plot, margin_frac)
+    lon_min_adj, lon_max_adj, lat_min_adj, lat_max_adj = bounds
+    center = [(lat_min_adj + lat_max_adj) / 2.0, (lon_min_adj + lon_max_adj) / 2.0]
+    lon_span = max(lon_max_adj - lon_min_adj, 1e-9)
+    lat_span = max(lat_max_adj - lat_min_adj, 1e-9)
+    mercator_width = lon_span * max(math.cos(math.radians(center[0])), 0.15)
+    map_aspect_ratio = min(max(mercator_width / lat_span, 0.75), 2.25)
+
+    fmap = folium.Map(
+        location=center,
+        zoom_start=17,
+        control_scale=True,
+        tiles=None,
+        zoom_snap=0,
+        zoom_delta=0.25,
+        prefer_canvas=True,
+    )
+    folium.TileLayer(
+        tiles="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}",
+        attr="Esri World Imagery",
+        name="Esri Satellite",
+        overlay=False,
+        control=True,
+    ).add_to(fmap)
+    folium.TileLayer(
+        tiles="OpenStreetMap",
+        attr="OpenStreetMap",
+        name="Street Map",
+        overlay=False,
+        control=True,
+    ).add_to(fmap)
+
+    heatmap_uri = _ndvi_heatmap_data_uri(x_plot, y_plot, ndvi_vals, bounds)
+    folium.raster_layers.ImageOverlay(
+        image=heatmap_uri,
+        bounds=[[lat_min_adj, lon_min_adj], [lat_max_adj, lon_max_adj]],
+        name="NDVI",
+        opacity=0.75,
+        interactive=False,
+        cross_origin=False,
+        zindex=2,
+    ).add_to(fmap)
+
+    vmin, vmax = float(np.min(ndvi_vals)), float(np.max(ndvi_vals))
+    if vmax <= vmin:
+        vmax = vmin + 1e-6
+    cmap = cm.LinearColormap(
+        colors=["#d62728", "#ff7f0e", "#ffff00", "#2ca02c"],
+        vmin=vmin,
+        vmax=vmax,
+        caption=f"NDVI - {sheet_name}",
+    )
+    cmap.add_to(fmap)
+
+    point_order = _qgis_point_order(x_plot, y_plot)
+    for idx, (lon, lat, ndvi, riesgo) in enumerate(zip(x_plot, y_plot, ndvi_vals, riesgo_vals)):
+        label = point_order[idx]
+        color = cmap(float(ndvi))
+        tooltip = (
+            f"<b>Punto {label}</b><br>"
+            f"NDVI={float(ndvi):.4f}<br>"
+            f"Lat={float(lat):.6f}<br>"
+            f"Long={float(lon):.6f}<br>"
+            f"Riesgo={riesgo}"
+        )
+        folium.CircleMarker(
+            location=[lat, lon],
+            radius=13,
+            color="white",
+            weight=2,
+            fill=True,
+            fill_color=color,
+            fill_opacity=0.62,
+            tooltip=folium.Tooltip(tooltip, sticky=True),
+            z_index_offset=10,
+        ).add_to(fmap)
+        folium.Marker(
+            location=[lat, lon],
+            icon=folium.DivIcon(
+                html=(
+                    "<div class='qgis-point-label'>"
+                    f"{label}"
+                    "</div>"
+                ),
+                icon_size=(34, 34),
+                icon_anchor=(17, 17),
+                class_name="qgis-point-label-wrap",
+            ),
+            interactive=False,
+        ).add_to(fmap)
+
+    leaflet_bounds = [[lat_min_adj, lon_min_adj], [lat_max_adj, lon_max_adj]]
+    fmap.fit_bounds(leaflet_bounds, padding=(0, 0))
+    folium.LayerControl(position="topright", collapsed=True).add_to(fmap)
+    map_name = fmap.get_name()
+
+    map_css = """
+    <style>
+        html, body {
+            margin: 0;
+            padding: 0;
+            background: #0b0f12;
+            overflow: hidden;
+        }
+        .folium-map {
+            width: min(100%, 920px) !important;
+            aspect-ratio: __MAP_ASPECT_RATIO__;
+            height: auto !important;
+            min-height: 360px;
+            max-height: 660px;
+            margin: 0 auto;
+            overflow: hidden;
+            border-radius: 6px;
+        }
+        .leaflet-container {
+            background: #0b0f12;
+            font-family: Inter, Segoe UI, Arial, sans-serif;
+        }
+        .qgis-point-label {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 34px;
+            height: 34px;
+            color: white;
+            font-size: 18px;
+            font-weight: 800;
+            line-height: 1;
+            text-shadow: 0 1px 3px rgba(0,0,0,0.95), 0 0 5px rgba(0,0,0,0.9);
+            pointer-events: none;
+        }
+        .leaflet-control-layers,
+        .leaflet-control-scale,
+        .leaflet-control-attribution {
+            font-size: 11px;
+        }
+        .leaflet-container svg.legend {
+            position: absolute !important;
+            left: 50% !important;
+            bottom: 8px !important;
+            top: auto !important;
+            right: auto !important;
+            transform: translateX(-50%) !important;
+            background: rgba(255,255,255,0.92) !important;
+            border-radius: 6px !important;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.25) !important;
+            padding: 2px 6px !important;
+            max-width: 92vw !important;
+            width: 320px !important;
+            height: 50px !important;
+            z-index: 500 !important;
+        }
+        .leaflet-container svg.legend text { font-size: 10px !important; }
+    </style>
+    """.replace("__MAP_ASPECT_RATIO__", f"{map_aspect_ratio:.6f}")
+    import json as _json
+
+    zoom_block_js = """
+    <script>
+    (function() {
+        var bounds = __LEAFLET_BOUNDS__;
+        function refitMap() {
+            if (typeof __MAP_NAME__ !== 'undefined') {
+                __MAP_NAME__.invalidateSize();
+                __MAP_NAME__.fitBounds(bounds, { padding: [0, 0], animate: false });
+                __MAP_NAME__.setMaxBounds(bounds);
+            }
+        }
+        window.addEventListener('load', function() { setTimeout(refitMap, 50); });
+        window.addEventListener('resize', function() { setTimeout(refitMap, 50); });
+        document.addEventListener('wheel', function(e) {
+            if (e.ctrlKey || e.metaKey) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                return false;
+            }
+        }, { passive: false, capture: true });
+        document.addEventListener('keydown', function(e) {
+            if ((e.ctrlKey || e.metaKey) && (e.key==='+' || e.key==='-' || e.key==='=' || e.key==='0')) {
+                e.preventDefault();
+                e.stopImmediatePropagation();
+                return false;
+            }
+        }, { capture: true });
+    })();
+    </script>
+    """.replace("__LEAFLET_BOUNDS__", _json.dumps(leaflet_bounds)).replace("__MAP_NAME__", map_name)
+    fmap.get_root().header.add_child(folium.Element(map_css))
+    fmap.get_root().html.add_child(folium.Element(zoom_block_js))
+    return fmap.get_root().render()
 
 
 def create_2d_scatter_plot_ndvi(
@@ -347,6 +642,13 @@ def create_2d_scatter_plot_ndvi_interactive_qgis(
     """
 
     try:
+        if not google_api_key:
+            return create_2d_scatter_plot_ndvi_leaflet_qgis(
+                qgis_df=qgis_df,
+                sheet_name=sheet_name,
+                margin_frac=margin_frac,
+            )
+
         # 1) Ensure required columns
         for col in ["long-xm", "long-ym", "NDVI", "Riesgo"]:
             if col not in qgis_df.columns:
@@ -395,9 +697,6 @@ def create_2d_scatter_plot_ndvi_interactive_qgis(
                 lon_min_adj, lon_max_adj,
                 google_api_key
             )
-            print("AVAILABLE Map Key---------------------------")
-        else:
-            print("NO Map Key---------------------------")
 
         # 6) Show Google map
         if map_img is not None:
@@ -417,7 +716,7 @@ def create_2d_scatter_plot_ndvi_interactive_qgis(
         from matplotlib.colors import LinearSegmentedColormap
         from scipy.interpolate import Rbf
 
-        grid_res = 300
+        grid_res = min(180, max(80, int(np.sqrt(len(qgis_df)) * 36)))
         grid_lon = np.linspace(lon_min_adj, lon_max_adj, grid_res)
         grid_lat = np.linspace(lat_min_adj, lat_max_adj, grid_res)
         grid_x, grid_y = np.meshgrid(grid_lon, grid_lat)
@@ -507,6 +806,7 @@ def create_2d_scatter_plot_ndvi_interactive_qgis(
         plugins.connect(fig, plugins.Reset())
 
         html_str = mpld3.fig_to_html(fig)
+        plt.close(fig)
 
         # 11) JavaScript — disable scroll zoom on the mpld3 figure so the
         #     whole page scrolls uniformly and raster layers stay in sync.
@@ -646,7 +946,11 @@ def create_3d_surface_plot(
         xi, yi = np.meshgrid(xi, yi)
 
         points = np.column_stack((x, y))
-        zi = griddata(points, z, (xi, yi), method='linear')
+        try:
+            zi = griddata(points, z, (xi, yi), method='linear')
+        except Exception as exc:
+            logger.warning("Linear 3D surface interpolation failed; falling back to nearest interpolation: %s", exc)
+            zi = griddata(points, z, (xi, yi), method='nearest')
         zi = np.nan_to_num(zi, nan=0.0)
 
         if smoothness > 0:
@@ -970,6 +1274,13 @@ def create_3d_simulation_plot_time_interpolation(
             sphere_c.append(z_vals)
 
         num_pts = len(sphere_x[0]) if sphere_x else 0
+        point_labels = [str(i) for i in range(num_pts)]
+        if num_pts:
+            # Match the 2D point identifier convention: left-to-right by
+            # longitude, bottom-to-top by latitude.
+            ordered_indices = sorted(range(num_pts), key=lambda idx: (sphere_x[0][idx], sphere_y[0][idx]))
+            for label, idx in enumerate(ordered_indices):
+                point_labels[idx] = str(label)
 
         def _make_marker_trace(sx, sy, sz, sc):
             return go.Scatter3d(
@@ -983,10 +1294,11 @@ def create_3d_simulation_plot_time_interpolation(
                     cmax=global_max,
                     opacity=0.85,
                 ),
-                text=[f'{v:.3f}' for v in sc],
+                text=point_labels,
                 textposition='top center',
-                textfont=dict(size=7, color='white'),
-                hovertemplate='<b>NDVI:</b> %{marker.color:.3f}<br>'
+                textfont=dict(size=16, color='white'),
+                hovertemplate='<b>Punto:</b> %{text}<br>'
+                             '<b>NDVI:</b> %{marker.color:.3f}<br>'
                              '<b>Lon:</b> %{x:.6f}<br>'
                              '<b>Lat:</b> %{y:.6f}<extra></extra>',
                 showlegend=False

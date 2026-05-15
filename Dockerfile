@@ -23,7 +23,7 @@ COPY .streamlit/ .streamlit/
 # Copy .env file if it exists
 COPY .env* ./
 
-# Expose all three ports for Option B
+# Expose gateway plus desktop/mobile Streamlit workers
 EXPOSE 8000 8501 8502
 
 # Set environment variables from .env file

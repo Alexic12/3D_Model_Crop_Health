@@ -106,7 +106,7 @@ class Settings(BaseSettings):
     API_PORT: int = Field(default=8000)
     
     # External Services
-    GOOGLE_MAPS_API_KEY: str = Field(default="AIzaSyB...")
+    GOOGLE_MAPS_API_KEY: str = Field(default="")
     
     # Operational
     LOG_LEVEL: str = Field(default="INFO")

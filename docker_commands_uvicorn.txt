@@ -114,7 +114,7 @@ aws ecs update-service \
 
 RUN ON CMD CONSOLE DOCKER FOR ecsTaskExecutionRole
 # Option 1: Pass environment variable directly
-docker run -d --name agrorisk-all -p 8000:8000 -p 8501:8501 -p 8502:8502 --restart unless-stopped -e GOOGLE_MAPS_API_KEY=AIzaSyB1Vv2XMsTy1AxEowrzOaI5Sn96ffC6HNY agrorisk:latest
+docker run -d --name agrorisk-all -p 8000:8000 -p 8501:8501 -p 8502:8502 --restart unless-stopped -e GOOGLE_MAPS_API_KEY=your_google_maps_api_key agrorisk:latest
 
 # Option 2: Use .env file (recommended)
 docker run -d --name agrorisk-all -p 8000:8000 -p 8501:8501 -p 8502:8502 --restart unless-stopped --env-file .env agrorisk:latest
